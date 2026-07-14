@@ -29,10 +29,14 @@ fetch path:
 doclens ask https://example.com/some-article "what does it say about X?"
 ```
 
+## Live demo
+
+_deploying — link lands here_
+
 ## How it works
 
 Deep dive: [design spec](docs/superpowers/specs/2026-07-14-doclens-design.md) ·
-[task-by-task implementation plan](docs/superpowers/plans/2026-07-14-doclens-core.md).
+[core plan](docs/superpowers/plans/2026-07-14-doclens-core.md) · [web plan](docs/superpowers/plans/2026-07-14-doclens-web.md).
 
 ```mermaid
 flowchart LR
@@ -232,6 +236,16 @@ with its own object model and release schedule to track.
 | Refusal threshold | top score < 0.30 cosine → refuse without an LLM call | `answer.py` — `REFUSAL_THRESHOLD` |
 | Embedding batch | ≤ 64 texts/request | `providers/gemini.py` — `EMBED_BATCH` |
 | Provider retry | 429 and 5xx → 2s/4s/8s backoff; other 4xx fail fast | `providers/_http.py` — `post_with_retry` |
+| Docs per session | 3 (oldest evicted) | `sessions.py` — `MAX_DOCS` |
+| Chunks per session | 1,500 (over → rejected) | `sessions.py` — `MAX_CHUNKS` |
+| Session idle TTL | 30 min, then swept | `sessions.py` — `ttl_s` |
+| Free ingests / day / IP | 3 (`PER_IP_INGEST_CAP`) — BYO key bypasses | `ratelimit.py` |
+| Free questions / day / IP | 15 (`PER_IP_QUESTION_CAP`) — BYO key bypasses | `ratelimit.py` |
+| Global daily budget | 300 combined (`DAILY_GLOBAL_CAP`) | `ratelimit.py` |
+| Question length | 500 chars | `server.py` |
+
+Sessions and rate counters are in-memory: a server restart (Render free tier sleeps/redeploys)
+wipes uploaded corpora and resets the daily counters. The UI says so.
 
 ## Models
 
@@ -247,12 +261,11 @@ env key is set).
 
 ## Scope
 
-This is the CLI + eval-harness core — Plan A of the
-[design spec](docs/superpowers/specs/2026-07-14-doclens-design.md) — and that's deliberate. The
-spec also describes a hosted FastAPI + SSE web app with per-visitor sessions, rate caps, a
-frontend and a Docker/Render deploy (Plan B); none of that is here yet, on purpose, so ingestion,
-chunking, the index, the provider adapters and the eval harness each got done properly instead of
-five things done halfway.
+This project ships the CLI + eval-harness core (Plan A of the
+[design spec](docs/superpowers/specs/2026-07-14-doclens-design.md)), plus a full web app (Plan B):
+a hosted FastAPI + SSE service with per-visitor sessions, rate caps, a responsive frontend, and
+Docker/Render deployment. Upload a PDF or paste a URL, watch ingestion stream live (parse → chunk
+→ embed), then ask questions and get page-cited answers.
 
 **Sibling project:** [repolens](https://github.com/nagendernss/repolens) asks questions about
 GitHub repos the same way doclens asks questions about documents — same provider-adapter pattern
@@ -272,10 +285,16 @@ doclens/
 ├── answer.py              question → retrieve → grounded prompt → AnswerResult
 ├── types.py               shared dataclasses + fingerprint()
 ├── cli.py                 `doclens ask` / `doclens models`
+├── server.py              FastAPI — /api/ingest + /api/ask SSE, sessions, static
+├── sessions.py            per-visitor in-memory corpus, TTL + caps
+├── ratelimit.py           per-IP (per-kind) + global daily caps
 └── providers/
     ├── _http.py           shared retry/backoff POST
-    ├── registry.py        model table, env-key lookup
+    ├── registry.py        model table, env-key lookup (BYO api_key)
     └── gemini.py          chat + batched embeddings (raw REST)
+
+web/                       vanilla-JS frontend (upload/URL ingest, live SSE, cited Q&A)
+Dockerfile, render.yaml    container + Render blueprint (Plan B deploy)
 
 evals/
 ├── corpus/                3 original authored documents (19 chunks total)
@@ -284,7 +303,7 @@ evals/
 ├── run.py                 resumable eval runner
 └── report.py              results.json → markdown → README splice
 
-tests/                     59 tests, offline (httpx.MockTransport, no live network)
+tests/                     135 tests, offline (TestClient / MockTransport, no live network)
 ```
 
 ## Development
@@ -292,13 +311,35 @@ tests/                     59 tests, offline (httpx.MockTransport, no live netwo
 ```bash
 pip install -e .[dev]
 ruff check .
-python -m pytest -q                 # 59 tests, no network calls
+python -m pytest -q                 # 135 tests, no network calls
 
 python -m evals.run --models gemini-3.1-flash-lite --out results.json
 python -m evals.report results.json --readme README.md    # fills in the Evals table
 ```
 
 `.github/workflows/ci.yml` runs the same lint + test steps on every push and pull request.
+
+## Deploy your own
+
+### Render (cloud)
+
+1. Fork this repo to your GitHub account
+2. Go to [render.com](https://render.com) and create a free account
+3. Click "New" → "Blueprint"
+4. Point it at your fork (`nagendernss/doclens` → your fork)
+5. Set the `GEMINI_API_KEY` secret to your API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+6. Click "Apply"
+
+The app will build and deploy automatically on every push to `main`.
+
+### Local (Docker)
+
+```bash
+docker build -t doclens .
+docker run -p 8000:10000 -e GEMINI_API_KEY=... doclens
+```
+
+Then open [http://localhost:8000](http://localhost:8000) and upload a PDF or paste a URL.
 
 ## License
 

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>doclens — ask your documents</title>
+<meta name="description" content="Upload a PDF or paste a link. Ask questions. Get answers cited to the page." />
+<meta name="theme-color" content="#08080b" />
+
+<meta property="og:title" content="doclens — ask your documents" />
+<meta property="og:description" content="Upload a PDF or paste a link. Ask questions. Get answers cited to the page." />
+<meta property="og:type" content="website" />
+<!-- og:image: stub for the deploy coordinator — add an absolute URL to a real screenshot once
+     the app is live, e.g. <meta property="og:image" content="https://<host>/static/og.png" /> -->
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='12.5' fill='none' stroke='%2300d179' stroke-width='2.6'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%2300d179'/%3E%3Cpath d='M16 1.5v6M16 24.5v6M1.5 16h6M24.5 16h6' stroke='%2300d179' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<div class="atmosphere" aria-hidden="true"></div>
+
+<header class="site-header">
+  <div class="brand-row">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <circle class="brand-mark-ring" cx="16" cy="16" r="12.5" fill="none" stroke-width="2.6"/>
+        <circle class="brand-mark-dot" cx="16" cy="16" r="3.4"/>
+        <path class="brand-mark-ticks" d="M16 1.5v6M16 24.5v6M1.5 16h6M24.5 16h6" stroke-width="2.6" stroke-linecap="round"/>
+      </svg>
+      <h1 class="brand-word">doc<span class="accent-text">lens</span></h1>
+    </div>
+    <p class="pitch">Upload a PDF or paste a link. Ask questions.<br class="pitch-break" /> Get answers cited to the page.</p>
+  </div>
+  <p class="session-note">
+    <span class="live-dot" aria-hidden="true"></span>
+    sessions reset on server restart &middot; your doc list lives in this browser tab only
+  </p>
+</header>
+
+<main class="main-col">
+
+  <!-- Ingest panel -->
+  <section class="panel" id="ingest-panel" aria-labelledby="ingest-heading">
+    <h2 class="panel-heading" id="ingest-heading"><span class="step-tag">01</span> ingest a document</h2>
+
+    <form id="ingest-form" novalidate>
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="file-input" accept="application/pdf,.pdf" hidden />
+        <label for="file-input" class="dropzone-label">
+          <svg class="dropzone-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"
+                  fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="dropzone-text">drop a PDF here, or click to browse</span>
+          <span class="dropzone-filename" id="dropzone-filename"></span>
+        </label>
+        <button type="button" class="clear-file-btn" id="clear-file-btn" hidden aria-label="clear selected file">&times;</button>
+      </div>
+
+      <div class="or-divider" role="presentation"><span>// or paste a link</span></div>
+
+      <div class="field">
+        <label for="url-input" class="field-label">document url</label>
+        <input type="text" inputmode="url" id="url-input" class="text-input"
+               placeholder="https://example.com/paper.pdf" maxlength="2000" autocomplete="off" />
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="model-select" class="field-label">model</label>
+          <select id="model-select" class="text-input"></select>
+        </div>
+        <div class="field">
+          <label for="byo-key-input" class="field-label">your api key <span class="field-label-optional">(optional)</span></label>
+          <input type="password" id="byo-key-input" class="text-input"
+                 placeholder="bypasses daily caps, never stored" autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+      <p class="hint" id="model-hint" hidden>no server-side model key configured &mdash; add your own Gemini API key above to use doclens.</p>
+
+      <div class="actions-row">
+        <button type="submit" id="ingest-btn" class="btn btn-primary">Ingest</button>
+      </div>
+
+      <div class="progress-area" id="ingest-progress" hidden>
+        <ol class="progress-steps" id="progress-steps">
+          <li data-stage="fetch"><span class="progress-step-label">fetch</span></li>
+          <li data-stage="parse"><span class="progress-step-label">parse</span></li>
+          <li data-stage="chunk"><span class="progress-step-label">chunk</span></li>
+          <li data-stage="embed"><span class="progress-step-label">embed</span></li>
+        </ol>
+        <div class="progress-bar"><div class="progress-bar-fill" id="progress-bar-fill"></div></div>
+        <p class="progress-status" id="progress-status" aria-live="polite">starting&hellip;</p>
+      </div>
+
+      <div class="banner banner-error" id="ingest-error" hidden role="alert"></div>
+    </form>
+  </section>
+
+  <!-- Document switcher -->
+  <section class="switcher-section" id="doc-switcher-section" hidden aria-labelledby="switcher-heading">
+    <div class="switcher-head">
+      <h2 class="panel-heading panel-heading-flush" id="switcher-heading"><span class="step-tag">02</span> your documents</h2>
+      <button type="button" class="link-btn" id="clear-docs-btn">clear list</button>
+    </div>
+    <div class="doc-switcher" id="doc-switcher"></div>
+  </section>
+
+  <!-- Ask panel -->
+  <section class="panel" id="ask-panel" hidden aria-labelledby="ask-heading">
+    <h2 class="panel-heading" id="ask-heading"><span class="step-tag">03</span> <span id="ask-title">ask a question</span></h2>
+
+    <div class="banner banner-warn" id="ask-expired-banner" hidden role="alert">
+      <p>This document expired (server restarted) &mdash; re-ingest it to keep asking questions.</p>
+      <button type="button" class="btn btn-ghost" id="reingest-btn">Re-ingest</button>
+    </div>
+
+    <form id="ask-form" novalidate>
+      <div class="field">
+        <label for="question-input" class="field-label">question</label>
+        <textarea id="question-input" class="text-input question-input" rows="3" maxlength="500"
+                  placeholder="what does this document say about&hellip;"></textarea>
+        <span class="char-counter" id="char-counter">0/500</span>
+      </div>
+      <div class="actions-row">
+        <button type="submit" id="ask-btn" class="btn btn-primary">Ask</button>
+      </div>
+    </form>
+
+    <p class="status-line" id="ask-status" aria-live="polite" hidden></p>
+
+    <ul class="retrieval-list" id="retrieval-list"></ul>
+
+    <div id="answer-area"></div>
+
+    <div class="banner banner-error" id="ask-error" hidden role="alert"></div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <p>no accounts &middot; no persistence &middot; nothing survives a restart</p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

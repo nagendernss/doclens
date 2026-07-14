@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: doclens
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PER_IP_INGEST_CAP
+        value: "3"
+      - key: PER_IP_QUESTION_CAP
+        value: "15"
+      - key: DAILY_GLOBAL_CAP
+        value: "300"
