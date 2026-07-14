@@ -31,7 +31,14 @@ doclens ask https://example.com/some-article "what does it say about X?"
 
 ## Live demo
 
-_deploying — link lands here_
+**[doclens-05fb.onrender.com](https://doclens-05fb.onrender.com/)** — upload a PDF or paste a link,
+then ask. Free tier: a few ingests + questions per day per visitor (bring your own Gemini key to
+bypass). First request after idle may take ~30s while the free dyno wakes; sessions reset on restart.
+
+**Chat mode:** each document keeps its own conversation — ask follow-up questions ("and their
+email?" after "what's the name?") and the model carries the prior turns as context, still answering
+only from the retrieved chunks. Click any `[p.N]` citation to jump to and highlight the source chunk
+it came from. Conversations live in your browser (localStorage), not the server.
 
 ## How it works
 
