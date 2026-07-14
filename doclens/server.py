@@ -5,9 +5,11 @@ import json
 import os
 import queue
 import threading
+from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from .answer import answer_question
 from .chunker import chunk_document
@@ -25,6 +27,7 @@ MAX_QUESTION_CHARS = 500
 RETRIEVAL_PREVIEW_CHARS = 160
 ASK_K = 5
 DOC_NOT_FOUND_MESSAGE = "document not found — upload it again (sessions reset on restart)"
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 _DONE = object()
 
 
@@ -283,6 +286,13 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
         })
         resp.set_cookie("dl_sid", sid, httponly=True, samesite="lax")
         return resp
+
+    if WEB_DIR.exists():
+        app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+
+        @app.get("/")
+        def index():
+            return FileResponse(WEB_DIR / "index.html")
 
     return app
 
