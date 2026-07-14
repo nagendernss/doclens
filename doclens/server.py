@@ -1,4 +1,4 @@
-"""FastAPI server: /api/ingest SSE (upload or URL), session cookie, rate caps."""
+"""FastAPI server: /api/ingest + /api/ask SSE, session cookie, rate caps."""
 from __future__ import annotations
 
 import json
@@ -9,17 +9,22 @@ import threading
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 
+from .answer import answer_question
 from .chunker import chunk_document
 from .index import VectorIndex
 from .ingest import IngestError, ingest_pdf_bytes
 from .ingest_url import ingest_url
 from .providers.registry import (MissingKeyError, UnknownModelError,
-                                 available_chat_models, get_embedder)
+                                 available_chat_models, get_chat, get_embedder)
 from .ratelimit import RateLimiter
 from .sessions import SessionDoc, SessionError, SessionStore
 
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
 EMBED_PROGRESS_BATCH = 16
+MAX_QUESTION_CHARS = 500
+RETRIEVAL_PREVIEW_CHARS = 160
+ASK_K = 5
+DOC_NOT_FOUND_MESSAGE = "document not found — upload it again (sessions reset on restart)"
 _DONE = object()
 
 
@@ -68,6 +73,34 @@ async def _read_ingest_request(request: Request) -> tuple[bytes | None, str, str
                 byo_key = raw_key.strip()
 
     return data, filename, url, byo_key
+
+
+async def _read_ask_request(request: Request) -> tuple[str | None, str | None, str | None, str | None]:
+    """Extract (doc_id, question, model, byo_key) from a JSON body.
+
+    A malformed or non-dict body yields all-None, which the caller turns into a
+    friendly "document not found" SSE error rather than a 4xx.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    raw_doc_id = body.get("doc_id")
+    doc_id = raw_doc_id if isinstance(raw_doc_id, str) else None
+
+    raw_question = body.get("question")
+    question = raw_question if isinstance(raw_question, str) else None
+
+    raw_model = body.get("model")
+    model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else None
+
+    raw_key = body.get("byo_key")
+    byo_key = raw_key.strip() if isinstance(raw_key, str) and raw_key.strip() else None
+
+    return doc_id, question, model, byo_key
 
 
 def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = None) -> FastAPI:
@@ -158,6 +191,81 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
                     # Never leak exception details: byo_key could appear in a provider's
                     # error message (e.g. an upstream HTTP error echoing the request).
                     emit("error", {"message": "ingest failed - try again"})
+                finally:
+                    q.put(_DONE)
+
+            threading.Thread(target=work, daemon=True).start()
+            while True:
+                item = q.get()
+                if item is _DONE:
+                    break
+                event, payload = item
+                yield _sse(event, payload)
+
+        resp = StreamingResponse(stream(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        })
+        resp.set_cookie("dl_sid", sid, httponly=True, samesite="lax")
+        return resp
+
+    @app.post("/api/ask")
+    async def ask(request: Request):
+        store: SessionStore = app.state.store
+        limiter: RateLimiter = app.state.limiter
+        ip = request.client.host if request.client else "unknown"
+        sid = request.cookies.get("dl_sid") or store.new_sid()
+
+        doc_id, question, model, byo_key = await _read_ask_request(request)
+        chat_model_name = model or DEFAULT_MODEL
+
+        def stream():
+            sdoc = store.get(sid, doc_id)
+            if sdoc is None:
+                yield _sse("error", {"message": DOC_NOT_FOUND_MESSAGE})
+                return
+
+            if not byo_key:
+                ok, reason = limiter.allow(ip, "question")
+                if not ok:
+                    yield _sse("error", {"message": reason})
+                    return
+
+            if not question or len(question) > MAX_QUESTION_CHARS:
+                yield _sse("error", {"message": "question must be between 1 and 500 characters"})
+                return
+
+            q: queue.Queue = queue.Queue()
+
+            def emit(event: str, payload: dict) -> None:
+                q.put((event, payload))
+
+            def work():
+                try:
+                    chat, chat_model = get_chat(chat_model_name, api_key=byo_key)
+                    embedder, embed_model = get_embedder(api_key=byo_key)
+                    result = answer_question(chat, chat_model, embedder, embed_model,
+                                             sdoc.index, question, k=ASK_K)
+                    chunks = [
+                        {"page": r.chunk.page, "score": r.score,
+                         "preview": r.chunk.text[:RETRIEVAL_PREVIEW_CHARS]}
+                        for r in result.retrieved
+                    ]
+                    emit("retrieval", {"chunks": chunks})
+                    emit("answer", {
+                        "answer": result.answer,
+                        "citations": result.citations,
+                        "refused": result.refused,
+                        "model": result.model,
+                        "input_tokens": result.usage.input_tokens,
+                        "output_tokens": result.usage.output_tokens,
+                    })
+                except (MissingKeyError, UnknownModelError) as exc:
+                    emit("error", {"message": str(exc)})
+                except Exception:
+                    # Never leak exception details: byo_key could appear in a provider's
+                    # error message (e.g. an upstream HTTP error echoing the request).
+                    emit("error", {"message": "question failed - try again"})
                 finally:
                     q.put(_DONE)
 
