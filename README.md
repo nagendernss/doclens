@@ -49,7 +49,7 @@ flowchart LR
 | Stage | Module | What it does |
 |---|---|---|
 | Ingest | `doclens/ingest.py`, `doclens/ingest_url.py` | PDF (`pypdf`) or URL (`httpx` + `selectolax`) → a `Document` of per-page text; SSRF guard on every URL |
-| Chunk | `doclens/chunker.py` | Sliding window, ~2,000 chars (~500 tokens) per chunk, 15% overlap, snapped to the nearest sentence boundary within ±80 chars |
+| Chunk | `doclens/chunker.py` | Sliding window, ~2,000 chars (~500 tokens) per chunk, 15% overlap, snapped back to a sentence boundary up to 80 chars earlier |
 | Embed | `doclens/providers/gemini.py` | Batches of ≤64 chunks → `gemini-embedding-001` vectors, with 429/5xx retry |
 | Index | `doclens/index.py` | Hand-built numpy `VectorIndex` — L2-normalize rows, dot product = cosine, top-k |
 | Answer | `doclens/answer.py` | Embed the question, retrieve top-5, build a context-only prompt, cite `[p.N]` per claim, refuse below the score threshold |
@@ -221,12 +221,12 @@ with its own object model and release schedule to track.
 | URL fetch size | 5 MB, streamed (aborts mid-download over cap) | `ingest_url.py` — `MAX_URL_BYTES` |
 | URL fetch timeout | 15 s | `ingest_url.py` — `TIMEOUT_S` |
 | URL redirect hops | 5, each hop re-validated against the SSRF guard before it's contacted | `ingest_url.py` — `MAX_REDIRECTS` |
-| Chunk size target | 2,000 chars (~500 tokens), snapped to a sentence boundary within ±80 chars | `chunker.py` — `chunk_document` |
+| Chunk size target | 2,000 chars (~500 tokens), snapped back to a sentence boundary up to 80 chars earlier | `chunker.py` — `chunk_document` |
 | Chunk overlap | 15% | `chunker.py` — `chunk_document` |
 | Retrieval depth | top-5 chunks by cosine similarity | `answer.py` — `answer_question(k=5)` |
 | Refusal threshold | top score < 0.30 cosine → refuse without an LLM call | `answer.py` — `REFUSAL_THRESHOLD` |
 | Embedding batch | ≤ 64 texts/request | `providers/gemini.py` — `EMBED_BATCH` |
-| Provider retry | 429/5xx → 2s/4s/8s backoff; 4xx fails fast | `providers/_http.py` — `post_with_retry` |
+| Provider retry | 429 and 5xx → 2s/4s/8s backoff; other 4xx fail fast | `providers/_http.py` — `post_with_retry` |
 
 ## Models
 
