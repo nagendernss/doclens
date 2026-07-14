@@ -17,6 +17,16 @@ class FakeEmb:
         return [[1.0, 0.0] for _ in texts]
 
 
+class CountingEmb:
+    """Embedder that counts how many times embed() is called."""
+    def __init__(self):
+        self.call_count = 0
+
+    def embed(self, texts, model):
+        self.call_count += 1
+        return [[1.0, 0.0] for _ in texts]
+
+
 def gold_cases():
     """Gold cases with computed fingerprints from real corpus."""
     # Compute first-chunk fingerprint of rfc-style-spec.md
@@ -68,3 +78,57 @@ def test_report_table_and_splice():
     assert "| Model | Recall@5 |" in md and "| m |" in md
     spliced = splice_readme("a\n<!-- evals:start -->\nold\n<!-- evals:end -->\nb", "T")
     assert "T" in spliced and "old" not in spliced
+
+
+def test_corrupt_nondict_starts_fresh(tmp_path):
+    """Test that corrupt JSON (wrong shape) recovers gracefully without crash."""
+    out = tmp_path / "r.json"
+    cases = gold_cases()
+
+    # Test case 1: JSON array at top level
+    out.write_text("[]")
+    results = run_eval(["gemini-3.1-flash-lite"], cases, str(out),
+                       embedder_factory=lambda **kw: (FakeEmb(), "e"),
+                       chat_factory=lambda m, **kw: (FakeChat(), m), sleep_s=0)
+    assert isinstance(results, dict)
+    assert "records" in results
+    parsed = json.loads(out.read_text())
+    assert isinstance(parsed, dict) and "records" in parsed
+    assert len(parsed["records"]) == 2
+
+    # Test case 2: JSON null at top level
+    out.write_text("null")
+    results = run_eval(["gemini-3.1-flash-lite"], cases, str(out),
+                       embedder_factory=lambda **kw: (FakeEmb(), "e"),
+                       chat_factory=lambda m, **kw: (FakeChat(), m), sleep_s=0)
+    assert isinstance(results, dict)
+    assert "records" in results
+    parsed = json.loads(out.read_text())
+    assert isinstance(parsed, dict) and "records" in parsed
+    assert len(parsed["records"]) == 2
+
+
+def test_resume_noop_skips_embedding(tmp_path):
+    """Test that embedding is not called when all cases are already in resume_set."""
+    out = tmp_path / "r.json"
+    cases = gold_cases()
+
+    # First run: build results
+    embedder1 = CountingEmb()
+    results = run_eval(["gemini-3.1-flash-lite"], cases, str(out),
+                       embedder_factory=lambda **kw: (embedder1, "e"),
+                       chat_factory=lambda m, **kw: (FakeChat(), m), sleep_s=0)
+    n_records_1 = len(results["records"])
+    embed_calls_1 = embedder1.call_count
+    assert n_records_1 == 2
+    assert embed_calls_1 > 0  # Should have embedded at least once
+
+    # Second run: all cases already in results, should not call embed()
+    embedder2 = CountingEmb()
+    results = run_eval(["gemini-3.1-flash-lite"], cases, str(out),
+                       embedder_factory=lambda **kw: (embedder2, "e"),
+                       chat_factory=lambda m, **kw: (FakeChat(), m), sleep_s=0)
+    n_records_2 = len(results["records"])
+    embed_calls_2 = embedder2.call_count
+    assert n_records_2 == n_records_1  # No new records added
+    assert embed_calls_2 == 0  # No embedding calls on full resume

@@ -43,24 +43,40 @@ def run_eval(
     try:
         with open(out_path, encoding="utf-8") as fh:
             results = json.load(fh)
-            if not isinstance(results.get("records"), list):
-                raise ValueError("invalid records")
-    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
-        if isinstance(e, FileNotFoundError):
-            results = {"records": [], "metadata": {}}
-        else:
-            warnings.warn(f"{out_path}: corrupt or malformed; starting fresh")
-            results = {"records": [], "metadata": {}}
+    except FileNotFoundError:
+        results = {"records": [], "metadata": {}}
+    except json.JSONDecodeError:
+        warnings.warn(f"{out_path}: corrupt or malformed; starting fresh")
+        results = {"records": [], "metadata": {}}
+
+    # Validate that results is a dict with records key
+    if not isinstance(results, dict) or "records" not in results:
+        warnings.warn(f"{out_path}: corrupt or malformed; starting fresh")
+        results = {"records": [], "metadata": {}}
 
     # Build resume set: {(model, case_id) for already-run}
     resume_set = {(r["model"], r["case_id"]) for r in results["records"]}
 
+    # Compute pending (model, case_id) pairs
+    pending_pairs = set()
+    for model in models:
+        for case in gold:
+            if (model, case["id"]) not in resume_set:
+                pending_pairs.add((model, case["id"]))
+
+    # If no pending cases, return early (no need to build corpus cache or embed)
+    if not pending_pairs:
+        return results
+
     # Build corpus cache: {doc_filename: (chunks, index)}
+    # Only for docs referenced by pending cases
+    pending_case_ids = {pair[1] for pair in pending_pairs}
+    docs_needed = {case["doc"] for case in gold if case["id"] in pending_case_ids}
+
     corpus_cache = {}
-    unique_docs = {case["doc"] for case in gold}
     embedder, embed_model = embedder_factory()
 
-    for doc_filename in unique_docs:
+    for doc_filename in docs_needed:
         doc_path = f"evals/corpus/{doc_filename}"
         doc = ingest_file(doc_path)
         chunks = chunk_document(doc)
