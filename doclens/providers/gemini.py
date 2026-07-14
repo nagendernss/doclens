@@ -22,7 +22,8 @@ class GeminiChat:
             if m["role"] == "system":
                 system = m["content"]
             else:
-                contents.append({"role": "user", "parts": [{"text": m["content"]}]})
+                role = "model" if m["role"] == "assistant" else "user"
+                contents.append({"role": role, "parts": [{"text": m["content"]}]})
         body: dict = {"contents": contents}
         if system:
             body["systemInstruction"] = {"parts": [{"text": system}]}

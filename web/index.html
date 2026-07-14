@@ -116,6 +116,8 @@
       <button type="button" class="btn btn-ghost" id="reingest-btn">Re-ingest</button>
     </div>
 
+    <div class="convo-log" id="convo-log" hidden aria-live="polite"></div>
+
     <form id="ask-form" novalidate>
       <div class="field">
         <label for="question-input" class="field-label">question</label>
@@ -129,10 +131,6 @@
     </form>
 
     <p class="status-line" id="ask-status" aria-live="polite" hidden></p>
-
-    <ul class="retrieval-list" id="retrieval-list"></ul>
-
-    <div id="answer-area"></div>
 
     <div class="banner banner-error" id="ask-error" hidden role="alert"></div>
   </section>

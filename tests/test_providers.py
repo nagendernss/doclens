@@ -73,3 +73,33 @@ def test_get_embedder(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "e")
     provider, model = get_embedder()
     assert model == "gemini-embedding-001"
+
+
+def test_chat_multi_turn_roles():
+    """Multi-turn conversation with alternating user/assistant roles."""
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={
+            "candidates": [{"content": {"parts": [{"text": "response"}]}}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}})
+
+    chat = GeminiChat(api_key="K", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    text, usage = chat.complete(
+        [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"}
+        ],
+        "gemini-3.1-flash-lite")
+
+    # Verify systemInstruction is set
+    assert seen["body"]["systemInstruction"]["parts"][0]["text"] == "s"
+
+    # Verify contents has alternating user/model roles
+    contents = seen["body"]["contents"]
+    assert len(contents) == 3
+    assert [c["role"] for c in contents] == ["user", "model", "user"]
+    assert [c["parts"][0]["text"] for c in contents] == ["q1", "a1", "q2"]

@@ -1,16 +1,20 @@
 // doclens frontend — vanilla JS, no build step, no CDN.
 //
 // Security invariant (hard gate): every dynamic value that ever reaches `.innerHTML`
-// is passed through esc() (text) or escAttr() (HTML attribute values). There are
-// exactly two call sites that use innerHTML at all — both inside renderCitedAnswer()
-// — everything else (retrieval cards, doc switcher, banners, meta lines) is built
-// with textContent / createElement / setAttribute / style properties, which never
-// parse their input as HTML and so need no escaping at all.
+// is passed through esc() (text) or escAttr() (HTML attribute values). There is
+// exactly one call site that uses innerHTML at all — inside renderCitedAnswer(),
+// which emits clickable `<button class="pill-cite" data-page="N">` citations —
+// everything else (turn bubbles, retrieval/source cards, doc switcher, banners) is
+// built with textContent / createElement / setAttribute / style properties, which
+// never parse their input as HTML and so need no escaping at all.
 (function () {
   "use strict";
 
   const LS_KEY = "doclens.docs.v1";
   const MAX_DOCS = 20;
+  const CONVOS_LS_KEY = "doclens.convos.v1";
+  const MAX_TURNS_PER_DOC = 40;
+  const FLASH_MS = 1200;
   const STAGES = ["fetch", "parse", "chunk", "embed"];
   const STAGE_LABELS = { fetch: "fetching", parse: "parsing", chunk: "chunking", embed: "embedding" };
   const CITATION_RE = /\[p\.(\d+)\]/g;
@@ -65,13 +69,12 @@
     dom.askTitle = document.getElementById("ask-title");
     dom.askExpiredBanner = document.getElementById("ask-expired-banner");
     dom.reingestBtn = document.getElementById("reingest-btn");
+    dom.convoLog = document.getElementById("convo-log");
     dom.askForm = document.getElementById("ask-form");
     dom.questionInput = document.getElementById("question-input");
     dom.charCounter = document.getElementById("char-counter");
     dom.askBtn = document.getElementById("ask-btn");
     dom.askStatus = document.getElementById("ask-status");
-    dom.retrievalList = document.getElementById("retrieval-list");
-    dom.answerArea = document.getElementById("answer-area");
     dom.askError = document.getElementById("ask-error");
 
     dom.progressStepEls = {};
@@ -89,6 +92,10 @@
     selectedDocId: null,
     models: [],
     defaultModel: null,
+    // doc_id -> [{q, answer, citations, refused, retrieval, ts}, ...] — the
+    // per-doc follow-up conversation log; mirrored to localStorage (see
+    // loadConvos/saveConvos below) so it survives reloads, capped per doc.
+    convos: {},
     // doc_id -> {type:"url", value} | {type:"file"} — session-only, powers the
     // "re-ingest" convenience button; never persisted (a File can't be, and a
     // URL is just a convenience, not part of the localStorage.v1 contract).
@@ -127,6 +134,69 @@
     state.docs.unshift(doc);
     if (state.docs.length > MAX_DOCS) state.docs.length = MAX_DOCS;
     saveDocs(state.docs);
+  }
+
+  // ---------------------------------------------------------------------
+  // localStorage per-doc conversation log — doclens.convos.v1 =
+  // {doc_id: [{q, answer, citations, refused, retrieval, ts}, ...]}, capped
+  // at MAX_TURNS_PER_DOC turns/doc (oldest evicted first). `refused` rides
+  // alongside the brief's {q,answer,citations,retrieval,ts} shape so a
+  // reload/doc-switch still renders the "Not in the document" badge on old
+  // refusal turns, not only on turns freshly answered this session.
+  // ---------------------------------------------------------------------
+
+  function loadConvos() {
+    try {
+      const raw = localStorage.getItem(CONVOS_LS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+      const out = {};
+      for (const [docId, turns] of Object.entries(parsed)) {
+        if (typeof docId !== "string" || !Array.isArray(turns)) continue;
+        out[docId] = turns
+          .filter((t) => t && typeof t === "object" &&
+                        typeof t.q === "string" && typeof t.answer === "string")
+          .slice(-MAX_TURNS_PER_DOC)
+          .map((t) => ({
+            q: t.q,
+            answer: t.answer,
+            citations: Array.isArray(t.citations) ? t.citations : [],
+            refused: t.refused === true,
+            retrieval: Array.isArray(t.retrieval) ? t.retrieval : [],
+            ts: Number.isFinite(t.ts) ? t.ts : Date.now(),
+          }));
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  function saveConvos() {
+    try {
+      localStorage.setItem(CONVOS_LS_KEY, JSON.stringify(state.convos));
+    } catch {
+      // storage disabled/full — degrade to in-memory only for this page load
+    }
+  }
+
+  function clearConvos() {
+    state.convos = {};
+    saveConvos();
+  }
+
+  function appendTurn(docId, turn) {
+    const turns = (state.convos[docId] || []).slice();
+    turns.push(turn);
+    while (turns.length > MAX_TURNS_PER_DOC) turns.shift(); // evict oldest
+    state.convos[docId] = turns;
+    saveConvos();
+  }
+
+  function historyForDoc(docId) {
+    const turns = state.convos[docId] || [];
+    return turns.map((t) => ({ question: t.q, answer: t.answer }));
   }
 
   // ---------------------------------------------------------------------
@@ -419,9 +489,11 @@
   function handleClearDocs() {
     state.docs = [];
     saveDocs(state.docs);
+    clearConvos();
     state.selectedDocId = null;
     renderDocSwitcher();
     dom.askPanel.hidden = true;
+    dom.convoLog.replaceChildren();
   }
 
   function selectDoc(docId) {
@@ -435,7 +507,7 @@
     dom.askTitle.textContent = `${doc.title} · ${doc.pages} pages · ${doc.chunks} chunks`;
     hideAskExpiredBanner();
     clearAskError();
-    clearAskResults();
+    renderConvoLog(docId);
     hideAskStatus();
     dom.questionInput.value = "";
     dom.charCounter.textContent = "0/500";
@@ -468,11 +540,6 @@
     dom.askStatus.textContent = "";
   }
 
-  function clearAskResults() {
-    dom.retrievalList.replaceChildren();
-    dom.answerArea.replaceChildren();
-  }
-
   function showAskExpiredBanner() {
     dom.askExpiredBanner.hidden = false;
   }
@@ -493,68 +560,61 @@
   }
 
   // ---------------------------------------------------------------------
-  // ask: retrieval + answer rendering
+  // ask: conversation log rendering
   //
-  // Both built with textContent/createElement/setAttribute/style — none of
-  // these parse their input as HTML, so nothing here needs esc()/escAttr(),
-  // even though `preview`/`title` are raw, untrusted document text.
+  // buildChunkCard/buildTurnEl are built with textContent/createElement/
+  // setAttribute/style — none of these parse their input as HTML, so nothing
+  // there needs esc()/escAttr(), even though `preview`/`q`/`answer` are raw,
+  // untrusted document/model text (including turns reloaded from
+  // localStorage, which a user could have hand-edited). renderCitedAnswer is
+  // the one deliberate innerHTML site — see its own comment below.
   // ---------------------------------------------------------------------
 
-  function renderRetrieval(chunks) {
-    dom.retrievalList.replaceChildren();
-    const fills = [];
+  function buildChunkCard(c) {
+    const page = c && Number.isFinite(c.page) ? c.page : 0;
+    const score = c && typeof c.score === "number" && Number.isFinite(c.score) ? c.score : 0;
+    const preview = c && typeof c.preview === "string" ? c.preview : "";
+    const pct = Math.max(0, Math.min(100, Math.round(score * 100)));
 
-    for (const c of chunks) {
-      const page = Number.isFinite(c.page) ? c.page : 0;
-      const score = typeof c.score === "number" && Number.isFinite(c.score) ? c.score : 0;
-      const preview = typeof c.preview === "string" ? c.preview : "";
-      const pct = Math.max(0, Math.min(100, Math.round(score * 100)));
+    const li = document.createElement("li");
+    li.className = "chunk-card";
+    li.dataset.page = String(page);
 
-      const li = document.createElement("li");
-      li.className = "chunk-card";
+    const head = document.createElement("div");
+    head.className = "chunk-card-head";
 
-      const head = document.createElement("div");
-      head.className = "chunk-card-head";
+    const pagePill = document.createElement("span");
+    pagePill.className = "pill pill-page";
+    pagePill.textContent = `p.${page}`;
 
-      const pagePill = document.createElement("span");
-      pagePill.className = "pill pill-page";
-      pagePill.textContent = `p.${page}`;
+    const scoreBar = document.createElement("span");
+    scoreBar.className = "score-bar";
+    scoreBar.setAttribute("title", `similarity ${score.toFixed(2)}`);
+    const scoreFill = document.createElement("span");
+    scoreFill.className = "score-fill";
+    scoreFill.style.width = pct + "%";
+    scoreBar.appendChild(scoreFill);
 
-      const scoreBar = document.createElement("span");
-      scoreBar.className = "score-bar";
-      scoreBar.setAttribute("title", `similarity ${score.toFixed(2)}`);
-      const scoreFill = document.createElement("span");
-      scoreFill.className = "score-fill";
-      scoreBar.appendChild(scoreFill);
+    const scoreNum = document.createElement("span");
+    scoreNum.className = "score-num";
+    scoreNum.textContent = score.toFixed(2);
 
-      const scoreNum = document.createElement("span");
-      scoreNum.className = "score-num";
-      scoreNum.textContent = score.toFixed(2);
+    head.append(pagePill, scoreBar, scoreNum);
 
-      head.append(pagePill, scoreBar, scoreNum);
+    const previewEl = document.createElement("p");
+    previewEl.className = "chunk-preview";
+    previewEl.textContent = preview;
 
-      const previewEl = document.createElement("p");
-      previewEl.className = "chunk-preview";
-      previewEl.textContent = preview;
-
-      li.append(head, previewEl);
-      dom.retrievalList.appendChild(li);
-      fills.push([scoreFill, pct]);
-    }
-
-    // Commit width:0 to a real frame first, then animate to target — otherwise
-    // the browser coalesces both writes into a single paint and the meter just
-    // appears full with no "measurement" motion.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        for (const [el, pct] of fills) el.style.width = pct + "%";
-      });
-    });
+    li.append(head, previewEl);
+    return li;
   }
 
-  // The one deliberate innerHTML site: splices inline citation pills into
+  // The one deliberate innerHTML site: splices inline citation *buttons* into
   // model-generated prose. Every interpolated value is escaped, with no
-  // exceptions, so the invariant is grep-able and trivially auditable.
+  // exceptions, so the invariant is grep-able and trivially auditable. The
+  // page group is `\d+` by construction (CITATION_RE), so data-page is
+  // already digits-only; escAttr() is applied anyway so the "everything
+  // dynamic is escaped" rule has zero silent exceptions.
   function renderCitedAnswer(container, text) {
     CITATION_RE.lastIndex = 0;
     let last = 0;
@@ -563,43 +623,100 @@
     while ((match = CITATION_RE.exec(text)) !== null) {
       html += esc(text.slice(last, match.index));
       const page = match[1];
-      html += `<span class="pill pill-cite" title="${escAttr("cited page " + page)}">p.${esc(page)}</span>`;
+      html += `<button type="button" class="pill pill-cite" data-page="${escAttr(page)}" ` +
+              `title="${escAttr("cited page " + page)}">p.${esc(page)}</button>`;
       last = CITATION_RE.lastIndex;
     }
     html += esc(text.slice(last));
     container.innerHTML = html;
   }
 
-  function renderAnswer(data) {
-    const answerText = typeof data.answer === "string" ? data.answer : "";
-    const refused = data.refused === true;
-    const model = typeof data.model === "string" ? data.model : "";
-    const inTok = Number.isFinite(data.input_tokens) ? data.input_tokens : 0;
-    const outTok = Number.isFinite(data.output_tokens) ? data.output_tokens : 0;
+  function buildTurnEl(turn, index) {
+    const wrap = document.createElement("div");
+    wrap.className = "turn";
+    wrap.dataset.turnIndex = String(index);
 
-    dom.answerArea.replaceChildren();
+    const userBubble = document.createElement("div");
+    userBubble.className = "turn-user";
+    userBubble.textContent = typeof turn.q === "string" ? turn.q : "";
+    wrap.appendChild(userBubble);
 
-    const card = document.createElement("div");
-    card.className = "answer-card" + (refused ? " refused" : "");
+    const refused = turn.refused === true;
+    const agentBubble = document.createElement("div");
+    agentBubble.className = "turn-agent answer-card" + (refused ? " refused" : "");
 
     if (refused) {
       const badge = document.createElement("div");
       badge.className = "answer-badge";
       badge.textContent = "Not in the document";
-      card.appendChild(badge);
+      agentBubble.appendChild(badge);
     }
 
     const textEl = document.createElement("div");
     textEl.className = "answer-text";
-    renderCitedAnswer(textEl, answerText);
-    card.appendChild(textEl);
+    renderCitedAnswer(textEl, typeof turn.answer === "string" ? turn.answer : "");
+    agentBubble.appendChild(textEl);
 
-    const metaEl = document.createElement("div");
-    metaEl.className = "answer-meta";
-    metaEl.textContent = `${model} · ${inTok} in / ${outTok} out tokens`;
-    card.appendChild(metaEl);
+    // Retrieval previews collapsed behind a <details> — never expanded by
+    // default; a citation-pill click force-opens the one it targets (below).
+    const retrieval = Array.isArray(turn.retrieval) ? turn.retrieval : [];
+    if (retrieval.length) {
+      const details = document.createElement("details");
+      details.className = "sources-details";
 
-    dom.answerArea.appendChild(card);
+      const summary = document.createElement("summary");
+      summary.textContent = `${retrieval.length} source${retrieval.length === 1 ? "" : "s"}`;
+      details.appendChild(summary);
+
+      const list = document.createElement("ul");
+      list.className = "retrieval-list";
+      for (const c of retrieval) list.appendChild(buildChunkCard(c));
+      details.appendChild(list);
+
+      agentBubble.appendChild(details);
+    }
+
+    wrap.appendChild(agentBubble);
+    return wrap;
+  }
+
+  // Rebuilds the whole per-doc conversation log from state.convos. Cheap
+  // enough to always do in full (capped at MAX_TURNS_PER_DOC turns) rather
+  // than diffing — called on every append, doc switch, and clear.
+  function renderConvoLog(docId) {
+    const turns = state.convos[docId] || [];
+    dom.convoLog.replaceChildren();
+    dom.convoLog.hidden = turns.length === 0;
+    turns.forEach((turn, i) => dom.convoLog.appendChild(buildTurnEl(turn, i)));
+    dom.convoLog.scrollTop = dom.convoLog.scrollHeight;
+  }
+
+  // Clicking a [p.N] citation button scrolls + briefly highlights the
+  // matching retrieval-preview card(s) *within that same turn* (a citation
+  // in an earlier turn must not jump to a later turn's sources, or vice
+  // versa). No matching preview in that turn → no-op, never an error.
+  function handleConvoLogClick(e) {
+    const btn = e.target.closest("button.pill-cite");
+    if (!btn) return;
+
+    const page = btn.dataset.page || "";
+    if (!/^\d+$/.test(page)) return; // pills are digits-only; anything else is inert
+
+    const turnEl = btn.closest(".turn");
+    if (!turnEl) return;
+
+    const matches = Array.from(turnEl.querySelectorAll(".chunk-card"))
+      .filter((li) => li.dataset.page === page);
+    if (!matches.length) return;
+
+    const details = turnEl.querySelector("details.sources-details");
+    if (details) details.open = true;
+
+    matches[0].scrollIntoView({ behavior: "smooth", block: "center" });
+    for (const card of matches) {
+      card.classList.add("flash");
+      setTimeout(() => card.classList.remove("flash"), FLASH_MS);
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -620,15 +737,20 @@
       return;
     }
 
+    const docId = state.selectedDocId;
     setAskBusy(true);
-    clearAskResults();
     showAskStatus("retrieving relevant passages…");
 
     const modelValue = dom.modelSelect.value || undefined;
     const byoKey = dom.byoKeyInput.value.trim();
-    const payload = { doc_id: state.selectedDocId, question };
+    // Send this doc's whole stored conversation as history; the server keeps
+    // only the last 6 well-formed turns (and truncates long answers) so no
+    // client-side slicing is needed here.
+    const payload = { doc_id: docId, question, history: historyForDoc(docId) };
     if (modelValue) payload.model = modelValue;
     if (byoKey) payload.byo_key = byoKey;
+
+    let pendingRetrieval = [];
 
     try {
       const resp = await fetch("/api/ask", {
@@ -640,17 +762,30 @@
 
       await consumeSSE(resp, {
         retrieval: (data) => {
-          renderRetrieval(Array.isArray(data.chunks) ? data.chunks : []);
+          pendingRetrieval = Array.isArray(data.chunks) ? data.chunks : [];
           showAskStatus("writing an answer…");
         },
         answer: (data) => {
           hideAskStatus();
-          renderAnswer(data);
+          appendTurn(docId, {
+            q: question,
+            answer: typeof data.answer === "string" ? data.answer : "",
+            citations: Array.isArray(data.citations) ? data.citations : [],
+            refused: data.refused === true,
+            retrieval: pendingRetrieval,
+            ts: Date.now(),
+          });
+          renderConvoLog(docId);
+          // Asking appends a turn; the input stays (cleared) for the next follow-up.
+          dom.questionInput.value = "";
+          dom.charCounter.textContent = "0/500";
+          refreshAskButton();
         },
         error: (data) => {
           hideAskStatus();
           const msg = typeof data.message === "string" ? data.message : "something went wrong — try again";
           if (msg.includes("document not found")) {
+            // Not saved as a turn — the doc session is gone, there's nothing to log.
             showAskExpiredBanner();
           } else {
             showAskError(friendlyMessage(msg));
@@ -662,6 +797,7 @@
       showAskError("network error — check your connection and try again");
     } finally {
       setAskBusy(false);
+      dom.questionInput.focus({ preventScroll: true });
     }
   }
 
@@ -722,6 +858,7 @@
 
     dom.clearDocsBtn.addEventListener("click", handleClearDocs);
     dom.reingestBtn.addEventListener("click", handleReingestClick);
+    dom.convoLog.addEventListener("click", handleConvoLogClick);
 
     dom.questionInput.addEventListener("input", () => {
       dom.charCounter.textContent = `${dom.questionInput.value.length}/500`;
@@ -748,6 +885,7 @@
     dom.ingestPanelEl = document.getElementById("ingest-panel");
 
     state.docs = loadDocs();
+    state.convos = loadConvos();
     renderDocSwitcher();
 
     refreshIngestButton();
