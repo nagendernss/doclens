@@ -295,3 +295,27 @@ def test_missing_api_key_yields_error_event(monkeypatch):
     events = sse_events(r.text)
     assert events[-1][0] == "error"
     assert "GEMINI_API_KEY" in events[-1][1]["message"]
+
+
+def test_malformed_multipart_yields_error_event():
+    """Malformed multipart body -> returns HTTP 200 with SSE error event, not HTTP 500."""
+    app = create_app(limiter=RateLimiter(per_ip_ingest=5, per_ip_question=5, global_cap=100))
+    c = TestClient(app, base_url="http://test")
+    # Send a request with multipart content-type header but invalid body (garbage, not multipart)
+    r = c.post(
+        "/api/ingest",
+        content=b"garbage not multipart",
+        headers={"content-type": "multipart/form-data; boundary=X"}
+    )
+    # Should return 200, not 500
+    assert r.status_code == 200
+    # Should have SSE content-type
+    assert r.headers["content-type"].startswith("text/event-stream")
+    # Should have exactly one error event with friendly message
+    events = sse_events(r.text)
+    assert len(events) == 1
+    assert events[0][0] == "error"
+    assert isinstance(events[0][1]["message"], str)
+    # Should not leak exception details
+    assert "MultipartError" not in events[0][1]["message"]
+    assert "garbage" not in events[0][1]["message"]

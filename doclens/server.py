@@ -94,8 +94,23 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
         store: SessionStore = app.state.store
         limiter: RateLimiter = app.state.limiter
         ip = request.client.host if request.client else "unknown"
-        data, filename, url, byo_key = await _read_ingest_request(request)
         sid = request.cookies.get("dl_sid") or store.new_sid()
+
+        # Try to parse the request body. If it fails (e.g., malformed multipart),
+        # return an SSE stream with a single error event (HTTP 200).
+        try:
+            data, filename, url, byo_key = await _read_ingest_request(request)
+        except Exception:
+            # Never leak exception details (e.g., exception type).
+            def error_stream():
+                yield _sse("error", {"message": "could not read the upload — try again"})
+
+            resp = StreamingResponse(error_stream(), media_type="text/event-stream", headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            })
+            resp.set_cookie("dl_sid", sid, httponly=True, samesite="lax")
+            return resp
 
         def stream():
             if data is None and not url:
