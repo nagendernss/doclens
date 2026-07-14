@@ -211,6 +211,43 @@ def test_byo_key_never_leaked_on_provider_error(client, monkeypatch, capsys):
     assert secret not in capsys.readouterr().out
 
 
+def test_whitespace_byo_key_treated_as_absent(client):
+    """Regression: a whitespace-only byo_key must not bypass the rate cap.
+
+    Before the fix, `if not byo_key` only checked truthiness, so " " (truthy)
+    counted as "present" and skipped the rate-limit check entirely.
+    """
+    for _ in range(3):
+        client.post("/api/ingest", files={"file": ("a.pdf", b"x", "application/pdf")})
+    r = client.post("/api/ingest", files={"file": ("a.pdf", b"x", "application/pdf")},
+                    data={"byo_key": "   "})
+    events = sse_events(r.text)
+    assert events == [("error", {"message": "ingest daily limit"})]
+
+
+def test_session_doc_created_uses_store_clock(monkeypatch):
+    """Regression: SessionDoc.created must come from the injected store clock, not wall time.
+
+    SessionStore.add() picks eviction victims by `created`, and SessionStore
+    exposes an injectable `now()` specifically so callers can control time in
+    tests/ops tooling. server.py must stamp new docs with that same clock.
+    """
+    import doclens.server as srv
+    monkeypatch.setattr(srv, "ingest_pdf_bytes", fake_ingest_pdf_bytes)
+    monkeypatch.setattr(srv, "get_embedder", fake_get_embedder)
+    clock = {"t": 12345.0}
+    store = SessionStore(now=lambda: clock["t"])
+    app = create_app(store=store,
+                     limiter=RateLimiter(per_ip_ingest=5, per_ip_question=5, global_cap=100))
+    c = TestClient(app, base_url="http://test")
+    r = c.post("/api/ingest", files={"file": ("a.pdf", b"x", "application/pdf")})
+    events = sse_events(r.text)
+    doc_id = events[-1][1]["doc_id"]
+    sid = r.cookies.get("dl_sid")
+    sdoc = store.get(sid, doc_id)
+    assert sdoc.created == 12345.0
+
+
 def test_garbage_pdf_yields_error_event():
     """Real ingest_pdf_bytes (not monkeypatched): unparseable bytes -> IngestError -> error event."""
     app = create_app(limiter=RateLimiter(per_ip_ingest=5, per_ip_question=5, global_cap=100))

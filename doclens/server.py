@@ -5,7 +5,6 @@ import json
 import os
 import queue
 import threading
-import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
@@ -53,8 +52,8 @@ async def _read_ingest_request(request: Request) -> tuple[bytes | None, str, str
         if isinstance(raw_url, str) and raw_url.strip():
             url = raw_url.strip()
         raw_key = form.get("byo_key")
-        if isinstance(raw_key, str) and raw_key:
-            byo_key = raw_key
+        if isinstance(raw_key, str) and raw_key.strip():
+            byo_key = raw_key.strip()
     else:
         try:
             body = await request.json()
@@ -65,8 +64,8 @@ async def _read_ingest_request(request: Request) -> tuple[bytes | None, str, str
             if isinstance(raw_url, str) and raw_url.strip():
                 url = raw_url.strip()
             raw_key = body.get("byo_key")
-            if isinstance(raw_key, str) and raw_key:
-                byo_key = raw_key
+            if isinstance(raw_key, str) and raw_key.strip():
+                byo_key = raw_key.strip()
 
     return data, filename, url, byo_key
 
@@ -134,7 +133,7 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
                     index = VectorIndex()
                     index.add(chunks, vectors)
                     sdoc = SessionDoc(doc_id=doc.doc_id, title=doc.title, pages=n_pages,
-                                      chunks=chunks, index=index, created=time.time())
+                                      chunks=chunks, index=index, created=store.now())
                     store.add(sid, sdoc)
                     emit("ready", {"doc_id": doc.doc_id, "title": doc.title,
                                    "pages": n_pages, "chunks": n_chunks})
