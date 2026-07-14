@@ -56,3 +56,92 @@ def test_ingest_url_size_cap():
     with pytest.raises(IngestError, match="5 MB"):
         ingest_url("https://example.com/big", client=make_client(handler),
                    resolver=lambda host: ["93.184.216.34"])
+
+
+def test_is_public_ip_cgnat():
+    assert _is_public_ip("100.64.0.1") is False
+    assert _is_public_ip("93.184.216.34") is True
+
+
+def test_redirect_to_private_blocked():
+    hit_hosts = []
+
+    def handler(request):
+        hit_hosts.append(request.url.host)
+        if request.url.host == "example.com":
+            return httpx.Response(302, headers={"location": "http://internal/secret"})
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              html="<title>T</title><p>secret data</p>")
+
+    def resolver(host):
+        return {"example.com": ["93.184.216.34"], "internal": ["10.0.0.5"]}[host]
+
+    with pytest.raises(IngestError, match="private|internal"):
+        ingest_url("https://example.com/start", client=make_client(handler), resolver=resolver)
+
+    assert "internal" not in hit_hosts
+
+
+def test_redirect_bounceback_blocked():
+    hit_hosts = []
+
+    def handler(request):
+        hit_hosts.append(request.url.host)
+        if request.url.host == "example.com" and request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "http://internal/x"})
+        if request.url.host == "internal":
+            return httpx.Response(302, headers={"location": "http://example.com/final"})
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              html="<title>T</title><p>final content</p>")
+
+    def resolver(host):
+        return {"example.com": ["93.184.216.34"], "internal": ["10.0.0.5"]}[host]
+
+    with pytest.raises(IngestError, match="private|internal"):
+        ingest_url("https://example.com/start", client=make_client(handler), resolver=resolver)
+
+    assert "internal" not in hit_hosts
+
+
+def test_redirect_to_public_followed():
+    def handler(request):
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "https://example.com/final"})
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              html="<title>T</title><p>final page content</p>")
+
+    doc = ingest_url("https://example.com/start", client=make_client(handler),
+                     resolver=lambda host: ["93.184.216.34"])
+    assert "final page content" in doc.pages[0].text
+
+
+def test_too_many_redirects():
+    def handler(request):
+        n = int(request.url.path.strip("/").removeprefix("hop") or 0)
+        if n < 6:
+            return httpx.Response(302, headers={"location": f"https://example.com/hop{n + 1}"})
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              html="<title>T</title><p>done</p>")
+
+    with pytest.raises(IngestError, match="redirects"):
+        ingest_url("https://example.com/hop0", client=make_client(handler),
+                   resolver=lambda host: ["93.184.216.34"])
+
+
+def test_stream_size_cap():
+    pulled = []
+    chunk = b"a" * (1024 * 1024)
+
+    def gen():
+        for i in range(20):
+            pulled.append(i)
+            yield chunk
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=gen())
+
+    with pytest.raises(IngestError, match="5 MB"):
+        ingest_url("https://example.com/big", client=make_client(handler),
+                   resolver=lambda host: ["93.184.216.34"])
+
+    assert len(pulled) < 20, "size cap must abort mid-stream, not after buffering the full body"
