@@ -79,6 +79,7 @@ class SessionStore:
 
         Enforces max_docs cap by evicting oldest doc if needed.
         Enforces max_chunks cap by raising SessionError.
+        All computation is done before mutation to ensure atomicity on error.
 
         Args:
             sid: Session ID.
@@ -98,21 +99,37 @@ class SessionStore:
             session_data = self.sessions[sid]
             docs = session_data["docs"]
 
-            # Check if eviction needed due to max_docs
-            if len(docs) >= self.max_docs:
-                # Find and evict oldest doc
-                oldest_sid = min(docs.keys(), key=lambda d: docs[d].created)
-                del docs[oldest_sid]
+            # Step 1: Determine if doc.doc_id already exists (update vs net-new)
+            is_update = doc.doc_id in docs
 
-            # Calculate current chunk count
+            # Step 2: Determine the victim to evict ONLY if net-new AND len(docs) >= max_docs
+            victim_id = None
+            if not is_update and len(docs) >= self.max_docs:
+                victim_id = min(docs.keys(), key=lambda d: docs[d].created)
+
+            # Step 3: Compute the resulting chunk total BEFORE mutating
+            # Start with sum of existing chunks
             current_chunks = sum(len(d.chunks) for d in docs.values())
-            new_chunks = len(doc.chunks)
 
-            # Check if adding would exceed max_chunks
-            if current_chunks + new_chunks > self.max_chunks:
+            # Subtract victim's chunks if evicting
+            if victim_id is not None:
+                current_chunks -= len(docs[victim_id].chunks)
+
+            # Subtract old doc's chunks if updating same doc_id
+            if is_update:
+                current_chunks -= len(docs[doc.doc_id].chunks)
+
+            # Add new doc chunks
+            new_total = current_chunks + len(doc.chunks)
+
+            # Step 4: If resulting total > max_chunks, raise SessionError with NO mutation
+            if new_total > self.max_chunks:
                 raise SessionError("session chunk budget exceeded")
 
-            # Add document
+            # Step 5: Only then mutate (delete victim if any, assign docs[doc.doc_id] = doc)
+            if victim_id is not None:
+                del docs[victim_id]
+
             docs[doc.doc_id] = doc
             session_data["last_access"] = self.now()
 

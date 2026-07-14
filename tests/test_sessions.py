@@ -16,7 +16,7 @@ def make_chunk(chunk_id: str, doc_id: str, page: int) -> Chunk:
     )
 
 
-def make_session_doc(doc_id: str, title: str, pages: int, num_chunks: int) -> SessionDoc:
+def make_session_doc(doc_id: str, title: str, pages: int, num_chunks: int, created: float = 0.0) -> SessionDoc:
     """Helper to create a test SessionDoc."""
     chunks = [make_chunk(f"c{i}", doc_id, i % pages) for i in range(num_chunks)]
     return SessionDoc(
@@ -25,7 +25,7 @@ def make_session_doc(doc_id: str, title: str, pages: int, num_chunks: int) -> Se
         pages=pages,
         chunks=chunks,
         index=VectorIndex(),
-        created=0.0,
+        created=created,
     )
 
 
@@ -90,23 +90,24 @@ def test_new_sid_hex_format_and_length():
 
 
 def test_max_docs_evicts_oldest():
-    """Test that adding beyond max_docs evicts the oldest document."""
+    """Test that adding beyond max_docs evicts the oldest document (by created time)."""
     clock = {"t": 100.0}
     store = SessionStore(ttl_s=1800, max_docs=3, max_chunks=1500, now=lambda: clock["t"])
 
     sid = store.new_sid()
 
-    # Add 3 documents
+    # Add 3 documents with distinct created times (not in insertion order)
+    # doc2 is added second, but doc1 is oldest by created time
     clock["t"] = 100.0
-    doc1 = make_session_doc("doc1", "Doc 1", 1, 50)
+    doc1 = make_session_doc("doc1", "Doc 1", 1, 50, created=1.0)  # oldest
     store.add(sid, doc1)
 
     clock["t"] = 200.0
-    doc2 = make_session_doc("doc2", "Doc 2", 1, 50)
+    doc2 = make_session_doc("doc2", "Doc 2", 1, 50, created=3.0)  # newest of initial 3
     store.add(sid, doc2)
 
     clock["t"] = 300.0
-    doc3 = make_session_doc("doc3", "Doc 3", 1, 50)
+    doc3 = make_session_doc("doc3", "Doc 3", 1, 50, created=2.0)  # middle
     store.add(sid, doc3)
 
     # Verify all 3 exist
@@ -114,12 +115,12 @@ def test_max_docs_evicts_oldest():
     assert store.get(sid, "doc2") is not None
     assert store.get(sid, "doc3") is not None
 
-    # Add a 4th document (should evict doc1, the oldest)
+    # Add a 4th document (should evict doc1, the oldest by created time)
     clock["t"] = 400.0
-    doc4 = make_session_doc("doc4", "Doc 4", 1, 50)
+    doc4 = make_session_doc("doc4", "Doc 4", 1, 50, created=4.0)
     store.add(sid, doc4)
 
-    # doc1 should be evicted
+    # doc1 should be evicted (oldest by created time)
     assert store.get(sid, "doc1") is None
     assert store.get(sid, "doc2") is not None
     assert store.get(sid, "doc3") is not None
@@ -284,22 +285,22 @@ def test_evicted_doc_frees_chunk_budget():
 
     sid = store.new_sid()
 
-    # Add doc with 700 chunks
+    # Add doc with 700 chunks (created=1.0)
     clock["t"] = 100.0
-    doc1 = make_session_doc("doc1", "Doc 1", 1, 700)
+    doc1 = make_session_doc("doc1", "Doc 1", 1, 700, created=1.0)
     store.add(sid, doc1)
 
-    # Add doc with 600 chunks (total 1300, under budget)
+    # Add doc with 600 chunks (total 1300, under budget) (created=2.0)
     clock["t"] = 200.0
-    doc2 = make_session_doc("doc2", "Doc 2", 1, 600)
+    doc2 = make_session_doc("doc2", "Doc 2", 1, 600, created=2.0)
     store.add(sid, doc2)
 
     # Now we have 2 docs (at max_docs=2), so adding a 3rd should evict doc1
     clock["t"] = 300.0
-    doc3 = make_session_doc("doc3", "Doc 3", 1, 400)
+    doc3 = make_session_doc("doc3", "Doc 3", 1, 400, created=3.0)
     store.add(sid, doc3)
 
-    # doc1 should be evicted (oldest), doc2 and doc3 should remain
+    # doc1 should be evicted (oldest by created), doc2 and doc3 should remain
     assert store.get(sid, "doc1") is None
     assert store.get(sid, "doc2") is not None
     assert store.get(sid, "doc3") is not None
@@ -312,21 +313,21 @@ def test_chunk_budget_with_eviction():
 
     sid = store.new_sid()
 
-    # Add doc1 with 600 chunks
+    # Add doc1 with 600 chunks (created=1.0)
     clock["t"] = 100.0
-    doc1 = make_session_doc("doc1", "Doc 1", 1, 600)
+    doc1 = make_session_doc("doc1", "Doc 1", 1, 600, created=1.0)
     store.add(sid, doc1)
 
-    # Add doc2 with 400 chunks (total 1000, at budget)
+    # Add doc2 with 400 chunks (total 1000, at budget) (created=2.0)
     clock["t"] = 200.0
-    doc2 = make_session_doc("doc2", "Doc 2", 1, 400)
+    doc2 = make_session_doc("doc2", "Doc 2", 1, 400, created=2.0)
     store.add(sid, doc2)
 
-    # Try to add doc3 with 200 chunks
-    # This exceeds max_docs=2, so doc1 (oldest) should be evicted first
+    # Try to add doc3 with 200 chunks (created=3.0)
+    # This exceeds max_docs=2, so doc1 (oldest by created) should be evicted first
     # After eviction, we have 400 chunks (doc2) + 200 (doc3) = 600, well under budget
     clock["t"] = 300.0
-    doc3 = make_session_doc("doc3", "Doc 3", 1, 200)
+    doc3 = make_session_doc("doc3", "Doc 3", 1, 200, created=3.0)
     store.add(sid, doc3)
 
     assert store.get(sid, "doc1") is None
@@ -409,3 +410,92 @@ def test_session_error_message():
         assert False, "Expected SessionError"
     except SessionError as e:
         assert str(e) == "session chunk budget exceeded"
+
+
+def test_failed_add_preserves_existing_docs():
+    """Regression test: failed add() must not evict existing docs.
+
+    When add() exceeds chunk budget, it should raise SessionError without
+    mutating state. Previously, add() evicted the oldest doc BEFORE checking
+    the chunk budget, so a failed add would silently destroy an unrelated doc.
+    """
+    clock = {"t": 100.0}
+    store = SessionStore(ttl_s=1800, max_docs=2, max_chunks=1000, now=lambda: clock["t"])
+
+    sid = store.new_sid()
+
+    # Add doc1 with 500 chunks (created=1.0)
+    clock["t"] = 100.0
+    doc1 = make_session_doc("doc1", "Doc 1", 1, 500, created=1.0)
+    store.add(sid, doc1)
+
+    # Add doc2 with 400 chunks (created=2.0, total=900, under budget)
+    clock["t"] = 200.0
+    doc2 = make_session_doc("doc2", "Doc 2", 1, 400, created=2.0)
+    store.add(sid, doc2)
+
+    # Try to add doc3 with 700 chunks (created=3.0)
+    # This exceeds max_docs=2, so the old code would evict doc1 (oldest).
+    # After eviction: 400 + 700 = 1100, which exceeds max_chunks=1000.
+    # The add() should raise SessionError WITHOUT the eviction being committed.
+    clock["t"] = 300.0
+    doc3 = make_session_doc("doc3", "Doc 3", 1, 700, created=3.0)
+    try:
+        store.add(sid, doc3)
+        assert False, "Expected SessionError due to chunk budget"
+    except SessionError as e:
+        assert "session chunk budget exceeded" in str(e)
+
+    # Both doc1 and doc2 must still exist (no eviction on failed add)
+    assert store.get(sid, "doc1") is not None
+    assert store.get(sid, "doc2") is not None
+    # doc3 must not be present
+    assert store.get(sid, "doc3") is None
+
+
+def test_readd_same_doc_id_no_eviction():
+    """Regression test: re-adding an existing doc_id must not evict siblings.
+
+    When add() is called with a doc_id that already exists in the session,
+    it should update the document in-place (not count as a net-new document).
+    This must not trigger eviction of sibling documents.
+    """
+    clock = {"t": 100.0}
+    store = SessionStore(ttl_s=1800, max_docs=3, max_chunks=1500, now=lambda: clock["t"])
+
+    sid = store.new_sid()
+
+    # Add doc1, doc2, doc3 to reach max_docs=3
+    clock["t"] = 100.0
+    doc1 = make_session_doc("doc1", "Doc 1", 1, 100, created=1.0)
+    store.add(sid, doc1)
+
+    clock["t"] = 200.0
+    doc2 = make_session_doc("doc2", "Doc 2", 1, 100, created=2.0)
+    store.add(sid, doc2)
+
+    clock["t"] = 300.0
+    doc3 = make_session_doc("doc3", "Doc 3", 1, 100, created=3.0)
+    store.add(sid, doc3)
+
+    # Verify all 3 exist
+    assert store.get(sid, "doc1") is not None
+    assert store.get(sid, "doc2") is not None
+    assert store.get(sid, "doc3") is not None
+
+    # Re-add doc3 with a new SessionDoc (same doc_id, but fresh instance)
+    # This should update doc3 in-place, not evict doc1
+    clock["t"] = 400.0
+    doc3_updated = make_session_doc("doc3", "Doc 3 Updated", 2, 150, created=4.0)
+    store.add(sid, doc3_updated)
+
+    # doc1 must still exist (no spurious eviction)
+    assert store.get(sid, "doc1") is not None
+    # doc2 must still exist
+    assert store.get(sid, "doc2") is not None
+    # doc3 must be updated
+    retrieved_doc3 = store.get(sid, "doc3")
+    assert retrieved_doc3 is not None
+    assert retrieved_doc3.title == "Doc 3 Updated"
+    assert retrieved_doc3.pages == 2
+    assert len(retrieved_doc3.chunks) == 150
