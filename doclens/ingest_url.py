@@ -14,6 +14,7 @@ from .types import Document
 MAX_URL_BYTES = 5 * 1024 * 1024
 TIMEOUT_S = 15.0
 MAX_REDIRECTS = 5
+USER_AGENT = "Mozilla/5.0 (compatible; doclens/0.1; +https://github.com/nagendernss/doclens)"
 _REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 _DROP_TAGS = ("script", "style", "nav", "footer", "header", "aside", "noscript", "iframe")
 
@@ -195,7 +196,8 @@ def ingest_url(url: str, client: httpx.Client | None = None, resolver=None) -> D
             # responses ourselves so each hop gets validated above before
             # it's contacted -- if httpx followed redirects internally we'd
             # never get the chance.
-            with client.stream("GET", fetch_url, headers=extra_headers,
+            request_headers = {**extra_headers, "user-agent": USER_AGENT}
+            with client.stream("GET", fetch_url, headers=request_headers,
                                 follow_redirects=False, extensions=extensions) as resp:
                 location = resp.headers.get("location")
                 if resp.status_code in _REDIRECT_STATUSES and location:

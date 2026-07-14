@@ -224,3 +224,20 @@ def test_injected_client_stream_extensions_empty():
 
     assert captured["extensions"] == {}
     assert "hello url content" in doc.pages[0].text
+
+
+def test_sends_user_agent():
+    from doclens.ingest_url import USER_AGENT
+    recorded_ua = None
+
+    def handler(request):
+        nonlocal recorded_ua
+        recorded_ua = request.headers.get("user-agent")
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              html="<title>T</title><p>ua test</p>")
+
+    doc = ingest_url("https://example.com/page", client=make_client(handler),
+                     resolver=lambda host: ["93.184.216.34"])
+    assert recorded_ua == USER_AGENT
+    assert "doclens" in recorded_ua
+    assert "ua test" in doc.pages[0].text
