@@ -41,3 +41,18 @@ def test_len():
     assert len(idx) == 0
     idx.add([C(0)], [[1.0]])
     assert len(idx) == 1
+
+
+def test_tie_stability():
+    """Verify stable sort preserves insertion order for tied cosine scores."""
+    idx = VectorIndex()
+    # Add 6 chunks with alternating vectors: [1,0], [0,1], [1,0], [0,1], [1,0], [0,1]
+    # All [1,0] and [0,1] will have score 1.0 when queried with [1,0]
+    idx.add(
+        [C(0), C(1), C(2), C(3), C(4), C(5)],
+        [[1, 0], [0, 1], [1, 0], [0, 1], [1, 0], [0, 1]]
+    )
+    out = idx.search([1, 0], k=3)
+    # All three results tie at score 1.0; insertion order should be c0, c2, c4
+    assert [r.chunk.chunk_id for r in out] == ["c0", "c2", "c4"]
+    assert all(math.isclose(r.score, 1.0, abs_tol=1e-9) for r in out)

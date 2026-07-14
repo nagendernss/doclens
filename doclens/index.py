@@ -67,5 +67,5 @@ class VectorIndex:
         if norm:
             q = q / norm
         scores = self._mat @ q
-        order = np.argsort(-scores)[:k]
+        order = np.argsort(-scores, kind="stable")[:k]
         return [Retrieved(chunk=self._chunks[i], score=float(scores[i])) for i in order]
