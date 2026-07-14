@@ -55,3 +55,29 @@ def test_model_refusal_detected():
     chat = FakeChat("Not in the document. The context never mentions pricing.")
     res = answer_question(chat, "m", FakeEmbedder([1.0, 0.0]), "e", make_index(), "pricing?")
     assert res.refused is True and res.citations == []
+
+
+def test_history_injected_before_context_question():
+    chat = FakeChat("Their degree is B.Tech [p.1].")
+    history = [
+        {"question": "what is the name?", "answer": "Nagender [p.1]."},
+        {"question": "their email?", "answer": "n@x.com [p.1]."},
+    ]
+    res = answer_question(chat, "m", FakeEmbedder([1.0, 0.0]), "e", make_index(),
+                          "what did they study?", history=history)
+    msgs = chat.calls[0]
+    assert msgs[0]["role"] == "system"
+    assert msgs[1] == {"role": "user", "content": "what is the name?"}
+    assert msgs[2] == {"role": "assistant", "content": "Nagender [p.1]."}
+    assert msgs[3] == {"role": "user", "content": "their email?"}
+    assert msgs[4] == {"role": "assistant", "content": "n@x.com [p.1]."}
+    assert msgs[5]["role"] == "user"
+    assert "what did they study?" in msgs[5]["content"]  # final = context + question
+    assert res.answer.startswith("Their degree")
+
+
+def test_no_history_unchanged():
+    chat = FakeChat("A [p.1].")
+    answer_question(chat, "m", FakeEmbedder([1.0, 0.0]), "e", make_index(), "q", history=None)
+    msgs = chat.calls[0]
+    assert len(msgs) == 2  # system + context/question only

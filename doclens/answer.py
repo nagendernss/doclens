@@ -22,17 +22,20 @@ REFUSAL_TEXT = ("Not in the document. The uploaded content doesn't appear to cov
 
 
 def answer_question(chat, chat_model: str, embedder, embed_model: str,
-                    index: VectorIndex, question: str, k: int = 5) -> AnswerResult:
+                    index: VectorIndex, question: str, k: int = 5,
+                    history: list[dict] | None = None) -> AnswerResult:
     qvec = embedder.embed([question], embed_model)[0]
     retrieved = index.search(qvec, k=k)
     if not retrieved or retrieved[0].score < REFUSAL_THRESHOLD:
         return AnswerResult(answer=REFUSAL_TEXT, citations=[], retrieved=retrieved,
                             refused=True, model=chat_model, usage=Usage())
     context = "\n\n".join(f"[p.{r.chunk.page}] {r.chunk.text}" for r in retrieved)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Context chunks:\n\n{context}\n\nQuestion: {question}"},
-    ]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for turn in history or []:
+        messages.append({"role": "user", "content": turn["question"]})
+        messages.append({"role": "assistant", "content": turn["answer"]})
+    messages.append({"role": "user",
+                     "content": f"Context chunks:\n\n{context}\n\nQuestion: {question}"})
     text, usage = chat.complete(messages, chat_model)
     citations = sorted({int(m) for m in _CITE_RE.findall(text)})
     refused = text.strip().startswith("Not in the document")
