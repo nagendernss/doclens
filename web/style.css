@@ -117,7 +117,8 @@ a {
    `display` would otherwise beat the UA stylesheet's `[hidden]{display:none}`
    and leave an empty box on screen. Force `hidden` to always win. */
 .banner[hidden],
-.status-line[hidden] {
+.status-line[hidden],
+.convo-log[hidden] {
   display: none;
 }
 
@@ -748,6 +749,37 @@ select.text-input {
   font-size: 0.95rem;
 }
 
+/* Scrollable per-doc conversation log, pinned above the (always-present)
+   question form so follow-ups are just another submit on the same input. */
+.convo-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-height: 55vh;
+  overflow-y: auto;
+  margin: var(--space-4) 0 0;
+  padding-right: 2px;
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.turn-user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px var(--space-4);
+  font-size: 0.9rem;
+  color: var(--text);
+  white-space: pre-wrap;
+  animation: fade-up 0.3s var(--ease) both;
+}
+
 .status-line {
   display: flex;
   align-items: center;
@@ -814,6 +846,18 @@ select.text-input {
   border: 1px solid var(--emerald-line);
   color: var(--emerald-strong);
   margin: 0 2px;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  transition: filter 0.15s var(--ease), transform 0.08s var(--ease);
+}
+
+.pill-cite:hover {
+  filter: brightness(1.15);
+}
+
+.pill-cite:active {
+  transform: scale(0.94);
 }
 
 .score-bar {
@@ -849,11 +893,13 @@ select.text-input {
   line-height: 1.5;
 }
 
-/* ---------- answer ---------- */
-
-#answer-area {
-  margin-top: var(--space-4);
+/* Briefly highlights the retrieval preview a citation pill was clicked for;
+   JS adds this class then removes it ~1.2s later (see FLASH_MS in app.js). */
+.chunk-card.flash {
+  animation: chunk-flash 1.2s var(--ease);
 }
+
+/* ---------- answer ---------- */
 
 .answer-card {
   border: 1px solid var(--border-strong);
@@ -897,6 +943,33 @@ select.text-input {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--text-faint);
+}
+
+/* Retrieval previews collapsed behind a native <details>/<summary> disclosure
+   inside each turn's agent bubble — free keyboard + screen-reader support. */
+.sources-details {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+.sources-details summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sources-details[open] summary {
+  color: var(--text-dim);
+  margin-bottom: var(--space-2);
+}
+
+.sources-details .retrieval-list {
+  margin-top: var(--space-2);
 }
 
 /* ---------- footer ---------- */
@@ -956,6 +1029,19 @@ select.text-input {
   }
   100% {
     margin-left: 100%;
+  }
+}
+
+@keyframes chunk-flash {
+  0% {
+    background: var(--emerald-soft);
+    border-color: var(--emerald);
+    box-shadow: 0 0 0 3px var(--emerald-glow);
+  }
+  100% {
+    background: var(--panel-inset);
+    border-color: var(--border-soft);
+    box-shadow: none;
   }
 }
 
