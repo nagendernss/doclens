@@ -29,6 +29,22 @@ ASK_K = 5
 DOC_NOT_FOUND_MESSAGE = "document not found — upload it again (sessions reset on restart)"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 _DONE = object()
+MAX_HISTORY_TURNS = 6
+MAX_HISTORY_ANSWER_CHARS = 1500
+
+
+def sanitize_history(raw) -> list[dict]:
+    if not isinstance(raw, list):
+        return []
+    turns = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        q, a = item.get("question"), item.get("answer")
+        if not isinstance(q, str) or not q.strip() or not isinstance(a, str) or not a.strip():
+            continue
+        turns.append({"question": q, "answer": a[:MAX_HISTORY_ANSWER_CHARS]})
+    return turns[-MAX_HISTORY_TURNS:]
 
 
 def _sse(event: str, payload: dict) -> str:
@@ -78,10 +94,10 @@ async def _read_ingest_request(request: Request) -> tuple[bytes | None, str, str
     return data, filename, url, byo_key
 
 
-async def _read_ask_request(request: Request) -> tuple[str | None, str | None, str | None, str | None]:
-    """Extract (doc_id, question, model, byo_key) from a JSON body.
+async def _read_ask_request(request: Request) -> tuple[str | None, str | None, str | None, str | None, list]:
+    """Extract (doc_id, question, model, byo_key, history) from a JSON body.
 
-    A malformed or non-dict body yields all-None, which the caller turns into a
+    A malformed or non-dict body yields all-None/empty list, which the caller turns into a
     friendly "document not found" SSE error rather than a 4xx.
     """
     try:
@@ -103,7 +119,9 @@ async def _read_ask_request(request: Request) -> tuple[str | None, str | None, s
     raw_key = body.get("byo_key")
     byo_key = raw_key.strip() if isinstance(raw_key, str) and raw_key.strip() else None
 
-    return doc_id, question, model, byo_key
+    history = sanitize_history(body.get("history"))
+
+    return doc_id, question, model, byo_key, history
 
 
 def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = None) -> FastAPI:
@@ -219,7 +237,7 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
         ip = request.client.host if request.client else "unknown"
         sid = request.cookies.get("dl_sid") or store.new_sid()
 
-        doc_id, question, model, byo_key = await _read_ask_request(request)
+        doc_id, question, model, byo_key, history = await _read_ask_request(request)
         chat_model_name = model or DEFAULT_MODEL
 
         def stream():
@@ -248,7 +266,7 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
                     chat, chat_model = get_chat(chat_model_name, api_key=byo_key)
                     embedder, embed_model = get_embedder(api_key=byo_key)
                     result = answer_question(chat, chat_model, embedder, embed_model,
-                                             sdoc.index, question, k=ASK_K)
+                                             sdoc.index, question, k=ASK_K, history=history)
                     chunks = [
                         {"page": r.chunk.page, "score": r.score,
                          "preview": r.chunk.text[:RETRIEVAL_PREVIEW_CHARS]}

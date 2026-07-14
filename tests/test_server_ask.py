@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from doclens.index import VectorIndex
 from doclens.ratelimit import RateLimiter
-from doclens.server import DEFAULT_MODEL, create_app
+from doclens.server import DEFAULT_MODEL, create_app, sanitize_history
 from doclens.sessions import SessionDoc, SessionStore
 from doclens.types import AnswerResult, Chunk, Retrieved, Usage
 
@@ -40,7 +40,7 @@ def make_doc(doc_id: str = DOC_ID, num_chunks: int = 1) -> SessionDoc:
                       index=VectorIndex(), created=100.0)
 
 
-def fake_answer_question(chat, chat_model, embedder, embed_model, index, question, k=5):
+def fake_answer_question(chat, chat_model, embedder, embed_model, index, question, k=5, history=None):
     return AnswerResult(
         answer="The answer is 42 [p.1].",
         citations=[1],
@@ -112,7 +112,7 @@ def test_answer_payload_exact_shape(client):
 def test_refusal_result_emits_answer_with_refused_true(client, monkeypatch):
     import doclens.server as srv
 
-    def fake_refusal(chat, chat_model, embedder, embed_model, index, question, k=5):
+    def fake_refusal(chat, chat_model, embedder, embed_model, index, question, k=5, history=None):
         return AnswerResult(
             answer="Not in the document. Try rephrasing.",
             citations=[],
@@ -291,3 +291,40 @@ def test_malformed_json_body_yields_not_found_error(client):
     assert r.status_code == 200
     events = sse_events(r.text)
     assert events == [("error", {"message": NOT_FOUND_MESSAGE})]
+
+
+def test_sanitize_history_rules():
+    raw = ([{"question": f"q{i}", "answer": "a" * 2000} for i in range(8)]
+           + ["junk", {"question": "", "answer": "x"}, {"question": "ok"},
+              {"question": "x", "answer": "   "}, {"question": "last", "answer": "short"}])
+    out = sanitize_history(raw)
+    assert len(out) == 6
+    assert out[-1] == {"question": "last", "answer": "short"}
+    assert all(len(t["answer"]) <= 1500 for t in out)
+    assert out[0]["question"] == "q3"
+
+
+def test_sanitize_history_non_list():
+    assert sanitize_history(None) == []
+    assert sanitize_history("x") == []
+    assert sanitize_history({"question": "q", "answer": "a"}) == []
+
+
+def test_ask_passes_sanitized_history(client, monkeypatch):
+    # client: fixture that seeds a session doc + monkeypatches answer_question.
+    # Capture history parameter to verify sanitization.
+    import doclens.server as srv
+    seen = {}
+
+    def capture(chat, chat_model, embedder, embed_model, index, question, k=5, history=None):
+        seen["history"] = history
+        return fake_answer_question(chat, chat_model, embedder, embed_model, index, question, k)
+
+    monkeypatch.setattr(srv, "answer_question", capture)
+    r = client.post("/api/ask", json={
+        "doc_id": DOC_ID, "question": "follow-up?",
+        "history": [{"question": "q1", "answer": "a1"}, "junk"],
+    })
+    events = sse_events(r.text)
+    assert events[-1][0] == "answer"
+    assert seen["history"] == [{"question": "q1", "answer": "a1"}]
