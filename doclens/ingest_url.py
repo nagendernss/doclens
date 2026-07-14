@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
 
 import httpx
 from selectolax.parser import HTMLParser
@@ -67,9 +67,6 @@ def _pin_to_ip(url: str, host: str, ips: list[str]) -> tuple[str, dict[str, str]
     IP we validated.
 
     Caveats (accepted, not solved here):
-    - This is a plain string substitution of the hostname within the URL,
-      so a host string that also happens to appear elsewhere in the URL
-      (e.g. a query parameter) would be rewritten too.
     - For https:// URLs this also repoints TLS SNI/certificate hostname
       verification at the IP literal instead of the original hostname,
       which will fail cert verification against a real HTTPS server. A
@@ -83,9 +80,56 @@ def _pin_to_ip(url: str, host: str, ips: list[str]) -> tuple[str, dict[str, str]
       -- pinning a mock's URL would only break the test's own routing, and
       the resolver seam already gives those tests full control over what
       "DNS" resolves to.
+    - Host matching is case-insensitive; URLs with mixed-case hostnames are
+      correctly pinned to the IP.
     """
-    ip_literal = f"[{ips[0]}]" if ":" in ips[0] else ips[0]
-    return url.replace(host, ip_literal, 1), {"Host": host}
+    parts = urlsplit(url)
+    netloc = parts.netloc
+
+    # Parse netloc to extract userinfo, host portion, and port.
+    # Format: [userinfo@]host[:port], where host may be an IPv6 literal [...]
+    if "@" in netloc:
+        userinfo, hostport = netloc.rsplit("@", 1)
+        userinfo = userinfo + "@"
+    else:
+        userinfo = ""
+        hostport = netloc
+
+    # Split hostport into host and port, handling IPv6 literals.
+    if hostport.startswith("["):
+        # IPv6 literal in the current URL (e.g., "[::1]:8080" or "[::1]")
+        if "]:" in hostport:
+            host_part, port = hostport.rsplit(":", 1)
+            port = ":" + port
+        else:
+            host_part = hostport
+            port = ""
+    else:
+        # IPv4 or hostname
+        if ":" in hostport:
+            host_part, port = hostport.rsplit(":", 1)
+            port = ":" + port
+        else:
+            host_part = hostport
+            port = ""
+
+    # Case-insensitive host matching; replace only if it matches.
+    if host_part.lower() == host.lower():
+        # Bracket IPv6 IP literals; leave IPv4 as-is.
+        ip_literal = f"[{ips[0]}]" if ":" in ips[0] else ips[0]
+        new_netloc = userinfo + ip_literal + port
+
+        # Rebuild the URL with the pinned IP in the netloc.
+        new_parts = (parts.scheme, new_netloc, parts.path, parts.query, parts.fragment)
+        fetch_url = urlunsplit(new_parts)
+    else:
+        # Host doesn't match, return original URL.
+        fetch_url = url
+
+    # Host header: original host + port (if present in the original URL).
+    host_header = host + port
+
+    return fetch_url, {"Host": host_header}
 
 
 def ingest_html(html: str, source: str) -> Document:

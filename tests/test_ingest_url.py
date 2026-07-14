@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from doclens.ingest_url import _is_public_ip, ingest_html, ingest_url
+from doclens.ingest_url import _is_public_ip, _pin_to_ip, ingest_html, ingest_url
 from doclens.ingest import IngestError
 
 
@@ -145,3 +145,27 @@ def test_stream_size_cap():
                    resolver=lambda host: ["93.184.216.34"])
 
     assert len(pulled) < 20, "size cap must abort mid-stream, not after buffering the full body"
+
+
+def test_pin_to_ip_plain():
+    fetch_url, headers = _pin_to_ip("http://example.com/p", "example.com", ["93.184.216.34"])
+    assert fetch_url == "http://93.184.216.34/p"
+    assert headers["Host"] == "example.com"
+
+
+def test_pin_to_ip_mixed_case():
+    fetch_url, headers = _pin_to_ip("http://Example.COM/p", "example.com", ["93.184.216.34"])
+    assert fetch_url == "http://93.184.216.34/p"
+    assert headers["Host"] == "example.com"
+
+
+def test_pin_to_ip_port_userinfo():
+    fetch_url, headers = _pin_to_ip("http://u:p@example.com:8080/x", "example.com", ["93.184.216.34"])
+    assert fetch_url == "http://u:p@93.184.216.34:8080/x"
+    assert headers["Host"] == "example.com:8080"
+
+
+def test_pin_to_ip_ipv6():
+    fetch_url, headers = _pin_to_ip("http://example.com/x", "example.com", ["2606:2800:220:1::"])
+    assert fetch_url == "http://[2606:2800:220:1::]/x"
+    assert headers["Host"] == "example.com"
