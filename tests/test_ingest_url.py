@@ -169,3 +169,58 @@ def test_pin_to_ip_ipv6():
     fetch_url, headers = _pin_to_ip("http://example.com/x", "example.com", ["2606:2800:220:1::"])
     assert fetch_url == "http://[2606:2800:220:1::]/x"
     assert headers["Host"] == "example.com"
+
+
+def test_pinned_fetch_sets_sni_hostname(monkeypatch):
+    # own_client path: pinning the socket to the validated IP must not also
+    # repoint TLS SNI/cert-hostname verification at the IP literal, or every
+    # real HTTPS fetch fails cert verification (the production bug). The
+    # fetch must reach the pinned IP while telling httpx to do the TLS
+    # handshake against the original hostname.
+    captured = {}
+
+    def handler(request):
+        captured["url_host"] = request.url.host
+        captured["host_header"] = request.headers["host"]
+        captured["sni_hostname"] = request.extensions.get("sni_hostname")
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              html="<title>T</title><p>pinned fetch content</p>")
+
+    real_client_cls = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client",
+        lambda *a, **kw: real_client_cls(transport=httpx.MockTransport(handler)),
+    )
+
+    doc = ingest_url("https://example.com/secure", resolver=lambda host: ["93.184.216.34"])
+
+    assert captured["url_host"] == "93.184.216.34"
+    assert captured["host_header"] == "example.com"
+    assert captured["sni_hostname"] == "example.com"
+    assert "pinned fetch content" in doc.pages[0].text
+
+
+def test_injected_client_stream_extensions_empty():
+    # own_client=False (every real caller in this suite uses MockTransport):
+    # pinning is skipped, so there must be no sni_hostname override either --
+    # an injected client's own request routing must be left untouched.
+    captured = {}
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              html="<title>T</title><p>hello url content</p>")
+
+    client = make_client(handler)
+    original_stream = client.stream
+
+    def spy_stream(*args, **kwargs):
+        captured["extensions"] = kwargs.get("extensions")
+        return original_stream(*args, **kwargs)
+
+    client.stream = spy_stream
+
+    doc = ingest_url("https://example.com/page", client=client,
+                     resolver=lambda host: ["93.184.216.34"])
+
+    assert captured["extensions"] == {}
+    assert "hello url content" in doc.pages[0].text

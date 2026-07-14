@@ -67,12 +67,14 @@ def _pin_to_ip(url: str, host: str, ips: list[str]) -> tuple[str, dict[str, str]
     IP we validated.
 
     Caveats (accepted, not solved here):
-    - For https:// URLs this also repoints TLS SNI/certificate hostname
-      verification at the IP literal instead of the original hostname,
-      which will fail cert verification against a real HTTPS server. A
-      fully correct fix needs a custom transport that pins the socket-level
-      connection while still presenting the original hostname for TLS SNI.
-      That is out of scope here.
+    - For https:// URLs, rewriting the URL's host to the IP literal would,
+      on its own, also repoint TLS SNI/certificate-hostname verification at
+      that IP literal -- failing cert verification against any real HTTPS
+      server. This function does not solve that by itself: the caller
+      (`ingest_url`) pairs this rewrite with an `sni_hostname` request
+      extension set to the original hostname, so the socket still connects
+      to the pinned IP (DNS-rebind protection intact) while TLS SNI and
+      certificate verification use the real hostname.
     - This path only runs for the client we construct ourselves
       (`own_client`, see `ingest_url`). Callers that inject their own
       `httpx.Client` (every test in this suite uses `httpx.MockTransport`,
@@ -175,13 +177,26 @@ def ingest_url(url: str, client: httpx.Client | None = None, resolver=None) -> D
             else:
                 fetch_url, extra_headers = current_url, {}
 
+            # sni_hostname: on the own_client path, `fetch_url` points at
+            # the validated IP literal (see `_pin_to_ip`), so the TLS layer
+            # would otherwise default to using that IP for both SNI and
+            # certificate-hostname verification -- which fails against any
+            # real HTTPS server. Passing the original hostname as the
+            # `sni_hostname` request extension makes httpcore open the TCP
+            # connection to the pinned IP (DNS-rebind protection intact)
+            # while presenting and verifying the real hostname over TLS.
+            # This is a no-op for the injected-client path (every test in
+            # this suite): {} adds no extension, leaving MockTransport's
+            # own routing untouched.
+            extensions = {"sni_hostname": parsed.hostname} if own_client else {}
+
             # follow_redirects=False per-request (belt-and-suspenders on top
             # of how `client` was constructed): we must see raw 3xx
             # responses ourselves so each hop gets validated above before
             # it's contacted -- if httpx followed redirects internally we'd
             # never get the chance.
             with client.stream("GET", fetch_url, headers=extra_headers,
-                                follow_redirects=False) as resp:
+                                follow_redirects=False, extensions=extensions) as resp:
                 location = resp.headers.get("location")
                 if resp.status_code in _REDIRECT_STATUSES and location:
                     current_url = urljoin(current_url, location)
