@@ -1,0 +1,285 @@
+# Gold eval set for doclens retrieval + faithfulness metrics.
+#
+# relevant_fps values are copied VERBATIM from a throwaway script that ran the
+# real pipeline (ingest_file -> chunk_document -> types.fingerprint) over the
+# committed evals/corpus/*.md docs. They must not be hand-edited; if the
+# corpus docs change, regenerate and re-verify every fingerprint below.
+cases:
+  # ---------------------------------------------------------------- rfc-style-spec.md
+  - id: rfc-01
+    doc: rfc-style-spec.md
+    question: What TCP port does the Meridian Sync Protocol use by default?
+    relevant_fps:
+      - '03fe36bd94ce|p1|meridian sync protocol msp version 4 status of'
+      - '03fe36bd94ce|p2|ic value 0x4d53 the ascii characters ms a'
+    expected_facts:
+      - '\b7847\b'
+    answerable: true
+
+  - id: rfc-02
+    doc: rfc-style-spec.md
+    question: What is the maximum size of an MSP object payload, in bytes?
+    relevant_fps:
+      - '03fe36bd94ce|p1|meridian sync protocol msp version 4 status of'
+      - '03fe36bd94ce|p2|ic value 0x4d53 the ascii characters ms a'
+    expected_facts:
+      - '\b65536\b|64\s*KiB'
+    answerable: true
+
+  - id: rfc-03
+    doc: rfc-style-spec.md
+    question: How many concurrent in-flight requests can a single MSP client have open on one session?
+    relevant_fps:
+      - '03fe36bd94ce|p1|ecur throughout this specification a session is a'
+    expected_facts:
+      - '\b32\b\s*concurrent'
+    answerable: true
+
+  - id: rfc-04
+    doc: rfc-style-spec.md
+    question: How many seconds does an MSP client have to complete the handshake before the server drops the connection?
+    relevant_fps:
+      - '03fe36bd94ce|p2|ic value 0x4d53 the ascii characters ms a'
+    expected_facts:
+      - '8\s*seconds?'
+    answerable: true
+
+  - id: rfc-05
+    doc: rfc-style-spec.md
+    question: What is the initial retry delay and the maximum number of retries in the MSP backoff schedule?
+    relevant_fps:
+      - '03fe36bd94ce|p2|cttoolarge also described in section 4 code 0x04'
+    expected_facts:
+      - '250\s*(ms|milliseconds)'
+      - '5\s*retries'
+    answerable: true
+
+  - id: rfc-06
+    doc: rfc-style-spec.md
+    question: How often should MSP keepalive messages be sent on an idle session, and what opcode do they use?
+    relevant_fps:
+      - '03fe36bd94ce|p3|koff calculation whenever it is present 8 security'
+    expected_facts:
+      - '45\s*seconds?'
+      - '0x0A'
+    answerable: true
+
+  - id: rfc-07
+    doc: rfc-style-spec.md
+    question: What is the maximum object size allowed under the constrained MSP-Lite profile?
+    relevant_fps:
+      - '03fe36bd94ce|p3|and a fresh payload indicating that two writes'
+    expected_facts:
+      - '4\s*Ki?B'
+    answerable: true
+
+  - id: rfc-08
+    doc: rfc-style-spec.md
+    question: When was MSP Version 2 formally deprecated, and what error code do conforming servers send if a client proposes it?
+    relevant_fps:
+      - '03fe36bd94ce|p4|c32c checksum field second error code 0x09 protocolmismatch'
+    expected_facts:
+      - 'January\s*2025'
+      - '0x09'
+    answerable: true
+
+  - id: rfc-u1
+    doc: rfc-style-spec.md
+    question: What programming language is the official Meridian Sync Protocol reference client written in?
+    relevant_fps: []
+    expected_facts: []
+    answerable: false
+
+  - id: rfc-u2
+    doc: rfc-style-spec.md
+    question: What is the monthly subscription price for the Meridian Sync Protocol hosted cloud service?
+    relevant_fps: []
+    expected_facts: []
+    answerable: false
+
+  # ---------------------------------------------------------------- device-manual.md
+  - id: dev-01
+    doc: device-manual.md
+    question: What voltage and wattage does the Boreal SmartBrew BX-9 require?
+    relevant_fps:
+      - '0028c7fc3af8|p1|boreal smartbrew bx9 coffee maker user manual 1'
+      - '0028c7fc3af8|p2|tructed before resuming use error code e4 means'
+    expected_facts:
+      - '120\s*V'
+      - '1350\s*(W|watts?)'
+    answerable: true
+
+  - id: dev-02
+    doc: device-manual.md
+    question: How many 5-ounce cups does the BX-9 thermal carafe hold at the MAX line?
+    relevant_fps:
+      - '0028c7fc3af8|p1|dle at the bottom of the reservoir fill'
+      - '0028c7fc3af8|p2|tructed before resuming use error code e4 means'
+    expected_facts:
+      - 'twelve|12\s*cups'
+    answerable: true
+
+  - id: dev-03
+    doc: device-manual.md
+    question: What does error code E3 indicate on the BX-9 display, and what should the user do?
+    relevant_fps:
+      - '0028c7fc3af8|p2|ollowed by a preinfusion bloom of approximately 30'
+    expected_facts:
+      - 'overheat'
+      - '30\s*minutes?'
+    answerable: true
+
+  - id: dev-04
+    doc: device-manual.md
+    question: How often should the BX-9 be descaled?
+    relevant_fps:
+      - '0028c7fc3af8|p2|ollowed by a preinfusion bloom of approximately 30'
+    expected_facts:
+      - '60\s*(brew\s*)?cycles'
+      - '3\s*months?'
+    answerable: true
+
+  - id: dev-05
+    doc: device-manual.md
+    question: What is the part number for the BX-9 replacement burr set, and how often should burrs be inspected?
+    relevant_fps:
+      - '0028c7fc3af8|p2|tructed before resuming use error code e4 means'
+    expected_facts:
+      - 'BX9-BURR-02'
+      - '6\s*months?'
+    answerable: true
+
+  - id: dev-06
+    doc: device-manual.md
+    question: What is the BX-9's warranty period, and how many business days does Boreal take to arrange repair or replacement after an approved claim?
+    relevant_fps:
+      - '0028c7fc3af8|p3|ounds without water or beans loaded the power'
+    expected_facts:
+      - '2[\s-]?year'
+      - '10\s*business\s*days'
+    answerable: true
+
+  - id: dev-07
+    doc: device-manual.md
+    question: What part number should a BX-9 owner order to brew without paper or cartridge filters?
+    relevant_fps:
+      - '0028c7fc3af8|p3|ounds without water or beans loaded the power'
+    expected_facts:
+      - 'BX9-GOLD-01'
+    answerable: true
+
+  - id: dev-08
+    doc: device-manual.md
+    question: What temperature range is recommended for long-term storage of the BX-9, and what should never be left in the reservoir during storage?
+    relevant_fps:
+      - '0028c7fc3af8|p3|ounds without water or beans loaded the power'
+      - '0028c7fc3af8|p3|on between 50 and 90 degrees fahrenheit temperatures'
+    expected_facts:
+      - '50.{0,10}90'
+      - 'vinegar'
+    answerable: true
+
+  - id: dev-u1
+    doc: device-manual.md
+    question: Does the BX-9 support brewing tea or other hot beverages besides coffee?
+    relevant_fps: []
+    expected_facts: []
+    answerable: false
+
+  - id: dev-u2
+    doc: device-manual.md
+    question: What color options are available for the BX-9 housing?
+    relevant_fps: []
+    expected_facts: []
+    answerable: false
+
+  # ---------------------------------------------------------------- policy.md
+  - id: pol-01
+    doc: policy.md
+    question: At what rate do regular employees accrue PTO, and what is the standard annual total?
+    relevant_fps:
+      - 'ca317121901a|p1|northbridge retail group employee leave and customer refund'
+    expected_facts:
+      - '1\.25\s*days?'
+      - '15\s*days?'
+    answerable: true
+
+  - id: pol-02
+    doc: policy.md
+    question: How many days of sick leave do employees receive per benefit year?
+    relevant_fps:
+      - 'ca317121901a|p1|less local law requires payout employees who separate'
+    expected_facts:
+      - '8\s*days?'
+    answerable: true
+
+  - id: pol-03
+    doc: policy.md
+    question: How many weeks of paid parental leave does Northbridge provide, and at what percentage of base pay?
+    relevant_fps:
+      - 'ca317121901a|p1|less local law requires payout employees who separate'
+    expected_facts:
+      - '12\s*weeks?'
+      - '100\s*(percent|%)'
+    answerable: true
+
+  - id: pol-04
+    doc: policy.md
+    question: How many paid bereavement days are available for the death of an immediate family member?
+    relevant_fps:
+      - 'ca317121901a|p2|approval of the schedule 6 bereavement and jury'
+    expected_facts:
+      - '\b5\b.{0,30}days?'
+    answerable: true
+
+  - id: pol-05
+    doc: policy.md
+    question: Within how many days of the delivery date can a customer return most items for a full refund?
+    relevant_fps:
+      - 'ca317121901a|p2|approval of the schedule 6 bereavement and jury'
+    expected_facts:
+      - '45\s*days?'
+    answerable: true
+
+  - id: pol-06
+    doc: policy.md
+    question: How long does an approved card refund take to process, and when does store credit expire?
+    relevant_fps:
+      - 'ca317121901a|p2|processed within 5 to 7 business days of'
+    expected_facts:
+      - '5\s*(to|-)\s*7\s*business\s*days'
+      - '12\s*months?'
+    answerable: true
+
+  - id: pol-07
+    doc: policy.md
+    question: What restocking fee applies to opened electronics that are not defective?
+    relevant_fps:
+      - 'ca317121901a|p2|processed within 5 to 7 business days of'
+    expected_facts:
+      - '15\s*(percent|%)'
+    answerable: true
+
+  - id: pol-08
+    doc: policy.md
+    question: How many days after delivery must a customer report a damaged item to qualify for free return shipping, and what order amount otherwise qualifies for free return shipping?
+    relevant_fps:
+      - 'ca317121901a|p3|ers choice with no restocking fee and no'
+    expected_facts:
+      - '10\s*days?'
+      - '(75\s*dollars?|\$75)'
+    answerable: true
+
+  - id: pol-u1
+    doc: policy.md
+    question: What is the minimum hourly wage paid to Northbridge retail employees?
+    relevant_fps: []
+    expected_facts: []
+    answerable: false
+
+  - id: pol-u2
+    doc: policy.md
+    question: How many vacation days do employees receive in their first year if they relocate internationally?
+    relevant_fps: []
+    expected_facts: []
+    answerable: false
