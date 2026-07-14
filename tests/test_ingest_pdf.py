@@ -61,3 +61,29 @@ def test_ingest_file_txt(tmp_path):
     f.write_text("hello world")
     doc = ingest_file(str(f))
     assert doc.pages[0].text == "hello world"
+
+
+def test_pdf_page_cap():
+    """Regression: PDFs exceeding 300-page cap must raise IngestError."""
+    import io
+    writer = PdfWriter()
+    for _ in range(301):
+        writer.add_blank_page(width=612, height=792)
+    buf = io.BytesIO()
+    writer.write(buf)
+    data = buf.getvalue()
+    with pytest.raises(IngestError, match="301 pages"):
+        ingest_pdf_bytes(data, "too-many-pages.pdf")
+
+
+def test_pdf_no_text_raises_ocr_hint():
+    """Regression: PDFs with no extractable text (blank pages) hint at OCR."""
+    import io
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.add_blank_page(width=612, height=792)
+    buf = io.BytesIO()
+    writer.write(buf)
+    data = buf.getvalue()
+    with pytest.raises(IngestError, match="scanned"):
+        ingest_pdf_bytes(data, "blank-pages.pdf")
