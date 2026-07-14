@@ -79,7 +79,7 @@ model=gemini-3.1-flash-lite tokens=147+31
 <!-- evals:start -->
 | Model | Recall@5 | MRR | Faithful | Refusal acc | p50 s |
 |-------|----------|-----|----------|-------------|-------|
-| _(not yet run)_ | — | — | — | — | — |
+| gemini-3.1-flash-lite | 1.00 | 0.86 | 100.0% | 100.0% | 1.78 |
 <!-- evals:end -->
 
 Populate the table above with a real run:
@@ -164,7 +164,7 @@ paths together across the 6 unanswerable gold cases.
 
 The first pass rejected `is_private`/loopback/link-local IPs on the resolved hostname — the
 obvious check, and the one most guides stop at. Follow-up hardening closed three real gaps,
-covered by 16 tests in `tests/test_ingest_url.py`:
+covered by 19 tests in `tests/test_ingest_url.py`:
 
 - **CGNAT.** `is_private` alone misses `100.64.0.0/10` (RFC 6598) — carrier-grade NAT space ISPs
   use to front many customers behind one public IP, which can still route to carrier-internal
@@ -183,12 +183,17 @@ covered by 16 tests in `tests/test_ingest_url.py`:
   buffering an oversized body fully into memory first and rejecting it afterward —
   `test_stream_size_cap` asserts the cap fires before all chunks are pulled.
 
-Known residual gaps, accepted and documented rather than silently left open: 6to4/site-local IPv6
-ranges aren't specifically enumerated (caught by `is_global` in practice, not by an explicit
-deny), and pinning an `https://` URL to a validated IP repoints TLS SNI at the IP literal, which
-fails certificate verification against a real HTTPS server rather than silently downgrading
-security — a fully correct fix needs a custom transport that pins the socket while still
-presenting the original hostname for SNI.
+- **HTTPS-safe IP pinning.** Pinning the socket to a validated IP would normally repoint TLS SNI
+  and certificate verification at the IP literal — which no real certificate covers, silently
+  breaking every `https://` fetch. The fetch passes the original hostname through httpx's
+  `sni_hostname` request extension, so the connection still goes to the pinned IP (DNS-rebind
+  protection intact) while SNI and cert verification use the real host. `doclens ask <https-url>`
+  works end to end.
+- **User-Agent.** Fetches send a real `User-Agent` so bot-filtering sites don't reflexively 403
+  the request.
+
+Known residual gap, accepted and documented rather than silently left open: 6to4/site-local IPv6
+ranges aren't specifically enumerated (caught by `is_global` in practice, not by an explicit deny).
 
 ### Original authored eval corpus
 
@@ -279,7 +284,7 @@ evals/
 ├── run.py                 resumable eval runner
 └── report.py              results.json → markdown → README splice
 
-tests/                     56 tests, offline (httpx.MockTransport, no live network)
+tests/                     59 tests, offline (httpx.MockTransport, no live network)
 ```
 
 ## Development
@@ -287,7 +292,7 @@ tests/                     56 tests, offline (httpx.MockTransport, no live netwo
 ```bash
 pip install -e .[dev]
 ruff check .
-python -m pytest -q                 # 56 tests, no network calls
+python -m pytest -q                 # 59 tests, no network calls
 
 python -m evals.run --models gemini-3.1-flash-lite --out results.json
 python -m evals.report results.json --readme README.md    # fills in the Evals table
