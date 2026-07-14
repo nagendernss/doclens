@@ -29,6 +29,10 @@ fetch path:
 doclens ask https://example.com/some-article "what does it say about X?"
 ```
 
+## Live demo
+
+_deploying — link lands here_
+
 ## How it works
 
 Deep dive: [design spec](docs/superpowers/specs/2026-07-14-doclens-design.md) ·
@@ -247,12 +251,11 @@ env key is set).
 
 ## Scope
 
-This is the CLI + eval-harness core — Plan A of the
-[design spec](docs/superpowers/specs/2026-07-14-doclens-design.md) — and that's deliberate. The
-spec also describes a hosted FastAPI + SSE web app with per-visitor sessions, rate caps, a
-frontend and a Docker/Render deploy (Plan B); none of that is here yet, on purpose, so ingestion,
-chunking, the index, the provider adapters and the eval harness each got done properly instead of
-five things done halfway.
+This project ships the CLI + eval-harness core (Plan A of the
+[design spec](docs/superpowers/specs/2026-07-14-doclens-design.md)), plus a full web app (Plan B):
+a hosted FastAPI + SSE service with per-visitor sessions, rate caps, a responsive frontend, and
+Docker/Render deployment. Upload a PDF or paste a URL, watch ingestion stream live (parse → chunk
+→ embed), then ask questions and get page-cited answers.
 
 **Sibling project:** [repolens](https://github.com/nagendernss/repolens) asks questions about
 GitHub repos the same way doclens asks questions about documents — same provider-adapter pattern
@@ -299,6 +302,28 @@ python -m evals.report results.json --readme README.md    # fills in the Evals t
 ```
 
 `.github/workflows/ci.yml` runs the same lint + test steps on every push and pull request.
+
+## Deploy your own
+
+### Render (cloud)
+
+1. Fork this repo to your GitHub account
+2. Go to [render.com](https://render.com) and create a free account
+3. Click "New" → "Blueprint"
+4. Point it at your fork (`nagendernss/doclens` → your fork)
+5. Set the `GEMINI_API_KEY` secret to your API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+6. Click "Apply"
+
+The app will build and deploy automatically on every push to `main`.
+
+### Local (Docker)
+
+```bash
+docker build -t doclens .
+docker run -p 8000:10000 -e GEMINI_API_KEY=... doclens
+```
+
+Then open [http://localhost:8000](http://localhost:8000) and upload a PDF or paste a URL.
 
 ## License
 
