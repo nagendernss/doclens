@@ -105,7 +105,7 @@ class BM25Index:
         if not query_tokens:
             return []
 
-        avglen = self._sum_len / self._n if self._n > 0 else 0
+        avglen = self._sum_len / self._n  # _n > 0 guaranteed by the guard above
         scores: dict[int, float] = {}
 
         for token in query_tokens:

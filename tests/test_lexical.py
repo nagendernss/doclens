@@ -12,20 +12,26 @@ def test_tokenize_drops_stopwords_and_short():
     assert toks.count("fox") == 2 and "brown" in toks
 
 
-def test_exact_term_outranks_paraphrase():
+def test_exact_term_outranks_partial_overlap():
+    # Both chunks share "energy" so both enter scoring and genuinely compete;
+    # chunk 0 also matches "mitochondria" so it must outrank the partial hit.
     idx = BM25Index()
-    idx.add([_c(0, "The mitochondria is the powerhouse of the cell."),
-             _c(1, "Cellular energy production occurs in specialized organelles.")])
-    ranked = idx.rank("mitochondria")
-    assert ranked[0][0] == 0            # exact lexical hit first
+    idx.add([_c(0, "mitochondria powerhouse energy conversion"),
+             _c(1, "cellular energy production process")])
+    ranked = idx.rank("mitochondria energy")
+    assert len(ranked) == 2                     # both competed, not a 1-element list
+    assert ranked[0][0] == 0                     # full match beats partial match
     assert all(s > 0 for _, s in ranked)
 
 
-def test_rank_sorted_and_tiebroken_by_index():
+def test_rank_tiebreak_is_index_ascending_not_insertion_order():
+    # Disjoint single-term chunks → equal scores. Query orders "beta" first so
+    # chunk 1 enters the score dict before chunk 0; a stability-only sort key
+    # (-score with no idx tiebreak) would yield [1, 0]. Correct (-score, idx) → [0, 1].
     idx = BM25Index()
-    idx.add([_c(0, "alpha beta"), _c(1, "alpha beta")])   # identical → same score
-    ranked = idx.rank("alpha")
-    assert [i for i, _ in ranked] == [0, 1]               # idx asc tiebreak
+    idx.add([_c(0, "alpha"), _c(1, "beta")])
+    ranked = idx.rank("beta alpha")
+    assert [i for i, _ in ranked] == [0, 1]               # idx asc tiebreak, not insertion order
 
 
 def test_empty_index_and_empty_query():
