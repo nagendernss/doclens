@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from doclens.trace import Trace, Tracer
 
 
@@ -24,6 +26,18 @@ def test_spans_appended_in_exit_order():
 def test_trace_id_is_12_hex():
     tid = Trace().trace_id
     assert len(tid) == 12 and all(c in "0123456789abcdef" for c in tid)
+
+
+def test_span_appended_even_if_block_raises():
+    # Observability guarantee: the span must be recorded even when the wrapped
+    # stage throws — you most want the trace when generate()/rerank() fails.
+    t = Tracer()
+    with pytest.raises(ValueError):
+        with t.span("boom", stage="generate"):
+            raise ValueError("upstream failed")
+    assert [s.name for s in t.trace.spans] == ["boom"]
+    assert t.trace.spans[0].duration_ms >= 0
+    assert t.trace.spans[0].meta == {"stage": "generate"}
 
 
 def test_to_dicts_and_jsonl_shape():
