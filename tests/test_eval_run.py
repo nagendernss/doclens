@@ -113,17 +113,17 @@ def test_run_eval_resume_keys_on_mode_triple(tmp_path):
 
 def test_report_table_and_splice():
     records = [
-        {"model": "m", "case_id": "a", "recall5": 1.0, "mrr": 1.0, "faithful": True,
+        {"model": "m", "mode": "dense", "case_id": "a", "recall5": 1.0, "mrr": 1.0, "faithful": True,
          "refused_correctly": None, "latency_s": 1.0, "input_tokens": 1,
          "output_tokens": 1, "error": None},
-        {"model": "m", "case_id": "b", "recall5": None, "mrr": None, "faithful": None,
+        {"model": "m", "mode": "dense", "case_id": "b", "recall5": None, "mrr": None, "faithful": None,
          "refused_correctly": True, "latency_s": 2.0, "input_tokens": 1,
          "output_tokens": 1, "error": None},
     ]
     (s,) = summarize(records)
     assert s["recall_at_5"] == 1.0 and s["refusal_acc"] == 1.0
     md = to_markdown([s])
-    assert "| Model | Recall@5 |" in md and "| m |" in md
+    assert "| Model | Mode | Recall@5 |" in md and "| m | dense |" in md
     spliced = splice_readme("a\n<!-- evals:start -->\nold\n<!-- evals:end -->\nb", "T")
     assert "T" in spliced and "old" not in spliced
 
@@ -184,3 +184,25 @@ def test_resume_noop_skips_embedding(tmp_path):
     embed_calls_2 = embedder2.call_count
     assert n_records_2 == n_records_1  # No new records added
     assert embed_calls_2 == 0  # No embedding calls on full resume
+
+
+def test_summarize_groups_by_model_and_mode():
+    from evals.report import summarize
+    recs = [
+      {"model":"m","mode":"dense","recall5":1.0,"mrr":0.5,"faithful":True,
+       "refused_correctly":None,"latency_s":1.0},
+      {"model":"m","mode":"hybrid","recall5":1.0,"mrr":0.8,"faithful":True,
+       "refused_correctly":None,"latency_s":1.5},
+    ]
+    s = summarize(recs)
+    assert {r["mode"] for r in s} == {"dense","hybrid"}
+
+
+def test_markdown_has_mode_column_and_order():
+    from evals.report import summarize, to_markdown
+    recs = [{"model":"m","mode":m,"recall5":1.0,"mrr":0.5,"faithful":True,
+             "refused_correctly":None,"latency_s":1.0}
+            for m in ("hybrid_rerank","dense","hybrid")]
+    md = to_markdown(summarize(recs))
+    assert "| Mode |" in md
+    assert md.index("dense") < md.index("hybrid_rerank")   # canonical order

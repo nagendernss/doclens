@@ -7,25 +7,31 @@ from statistics import median
 
 
 def summarize(records: list[dict]) -> list[dict]:
-    """Summarize records per model: recall_at_5, mrr, faithfulness, refusal_acc, p50_latency.
+    """Summarize records per (model, mode): recall_at_5, mrr, faithfulness, refusal_acc, p50_latency.
 
     Args:
         records: List of eval records (from run_eval output).
 
     Returns:
-        List of summary dicts per model, sorted by model name.
+        List of summary dicts per (model, mode), sorted by model name then canonical mode order.
 
     """
-    by_model = {}
+    by_model_mode = {}
     for r in records:
         model = r["model"]
-        if model not in by_model:
-            by_model[model] = []
-        by_model[model].append(r)
+        mode = r.get("mode")
+        key = (model, mode)
+        if key not in by_model_mode:
+            by_model_mode[key] = []
+        by_model_mode[key].append(r)
+
+    # Canonical mode order for sorting
+    mode_rank = {"dense": 0, "hybrid": 1, "hybrid_rerank": 2}
 
     summaries = []
-    for model in sorted(by_model.keys()):
-        recs = by_model[model]
+    for (model, mode) in sorted(by_model_mode.keys(),
+                                 key=lambda k: (k[0], mode_rank.get(k[1], 999))):
+        recs = by_model_mode[(model, mode)]
 
         # recall_at_5: mean over answerable cases (where recall5 is not None)
         recall5_vals = [r["recall5"] for r in recs if r["recall5"] is not None]
@@ -51,6 +57,7 @@ def summarize(records: list[dict]) -> list[dict]:
 
         summaries.append({
             "model": model,
+            "mode": mode,
             "recall_at_5": recall_at_5,
             "mrr": mrr_val,
             "faithfulness": faithfulness,
@@ -64,22 +71,23 @@ def summarize(records: list[dict]) -> list[dict]:
 def to_markdown(summaries: list[dict]) -> str:
     """Render summaries as markdown table.
 
-    Header: | Model | Recall@5 | MRR | Faithful | Refusal acc | p50 s |
+    Header: | Model | Mode | Recall@5 | MRR | Faithful | Refusal acc | p50 s |
 
     """
     lines = [
-        "| Model | Recall@5 | MRR | Faithful | Refusal acc | p50 s |",
-        "|-------|----------|-----|----------|-------------|-------|",
+        "| Model | Mode | Recall@5 | MRR | Faithful | Refusal acc | p50 s |",
+        "|-------|------|----------|-----|----------|-------------|-------|",
     ]
 
     for s in summaries:
         model = s["model"]
+        mode = s.get("mode", "")
         recall = f"{s['recall_at_5']:.2f}" if s["recall_at_5"] is not None else "—"
         mrr_str = f"{s['mrr']:.2f}" if s["mrr"] is not None else "—"
         faithful = f"{s['faithfulness']:.1%}" if s["faithfulness"] is not None else "—"
         refusal = f"{s['refusal_acc']:.1%}" if s["refusal_acc"] is not None else "—"
         p50 = f"{s['p50_latency']:.2f}" if s["p50_latency"] is not None else "—"
-        lines.append(f"| {model} | {recall} | {mrr_str} | {faithful} | {refusal} | {p50} |")
+        lines.append(f"| {model} | {mode} | {recall} | {mrr_str} | {faithful} | {refusal} | {p50} |")
 
     return "\n".join(lines)
 
