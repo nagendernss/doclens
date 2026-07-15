@@ -49,6 +49,27 @@ class VectorIndex:
         self._mat = mat if self._mat is None else np.vstack([self._mat, mat])
         self._chunks.extend(chunks)
 
+    def rank_all(self, vector: list[float]) -> list[tuple[int, float]]:
+        """All chunks as (index, cosine), sorted score desc, index asc as tiebreak.
+
+        Args:
+            vector: query embedding (list of floats).
+
+        Returns:
+            list of (chunk_index, score) tuples sorted by score descending,
+            with index ascending as tiebreak. Empty index → [].
+
+        """
+        if self._mat is None or not len(self._chunks):
+            return []
+        q = np.asarray(vector, dtype=np.float64)
+        norm = np.linalg.norm(q)
+        if norm:
+            q = q / norm
+        scores = self._mat @ q
+        order = np.argsort(-scores, kind="stable")
+        return [(int(i), float(scores[i])) for i in order]
+
     def search(self, vector: list[float], k: int = 5) -> list[Retrieved]:
         """Search for top-k nearest chunks by cosine similarity.
 

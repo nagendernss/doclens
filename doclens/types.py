@@ -33,6 +33,7 @@ class Chunk:
 class Retrieved:
     chunk: Chunk
     score: float
+    components: dict = field(default_factory=dict)
 
 
 @dataclass
