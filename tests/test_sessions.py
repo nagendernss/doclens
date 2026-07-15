@@ -499,3 +499,27 @@ def test_readd_same_doc_id_no_eviction():
     assert retrieved_doc3.title == "Doc 3 Updated"
     assert retrieved_doc3.pages == 2
     assert len(retrieved_doc3.chunks) == 150
+
+
+def test_add_and_get_trace():
+    """Test adding and retrieving a trace."""
+    from doclens.trace import Trace
+
+    store = SessionStore()
+    tr = Trace()
+    store.add_trace(tr)
+    assert store.get_trace(tr.trace_id) is tr
+    assert store.get_trace("deadbeef0000") is None
+
+
+def test_trace_ring_evicts_oldest():
+    """Test that trace ring evicts oldest when exceeding MAX_TRACES."""
+    from doclens.sessions import MAX_TRACES
+    from doclens.trace import Trace
+
+    store = SessionStore()
+    first = Trace()
+    store.add_trace(first)
+    for _ in range(MAX_TRACES):
+        store.add_trace(Trace())
+    assert store.get_trace(first.trace_id) is None  # evicted past cap
