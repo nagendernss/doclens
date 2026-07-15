@@ -9,7 +9,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .index import VectorIndex
 from .types import Chunk
 
 if TYPE_CHECKING:

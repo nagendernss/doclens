@@ -4,9 +4,9 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .answer import answer_question
+from .answer import RETRIEVAL_MODES, answer_question
 from .chunker import chunk_document
-from .index import VectorIndex
+from .hybrid import HybridIndex
 from .ingest import IngestError, ingest_file
 from .ingest_url import ingest_url
 from .providers.registry import (CHAT_MODELS, MissingKeyError, UnknownModelError,
@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     ask.add_argument("question")
     ask.add_argument("--model", default=DEFAULT_MODEL)
     ask.add_argument("-k", type=int, default=5)
+    ask.add_argument("--mode", choices=list(RETRIEVAL_MODES), default="hybrid_rerank")
     sub.add_parser("models")
     args = parser.parse_args(argv)
 
@@ -49,11 +50,11 @@ def main(argv: list[str] | None = None) -> int:
             else ingest_file(source)
         chunks = chunk_document(doc)
         vectors = embedder.embed([c.text for c in chunks], embed_model)
-        index = VectorIndex()
+        index = HybridIndex()
         index.add(chunks, vectors)
         print(f"doclens · {doc.title} · {len(doc.pages)} pages · {len(chunks)} chunks")
         res = answer_question(chat, chat_model, embedder, embed_model, index,
-                              args.question, k=args.k)
+                              args.question, k=args.k, retrieval_mode=args.mode)
         pages = ", ".join(f"p.{r.chunk.page}" for r in res.retrieved)
         print(f"retrieved: {pages}")
         print()

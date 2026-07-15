@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from doclens.index import VectorIndex
 from doclens.ratelimit import RateLimiter
-from doclens.server import DEFAULT_MODEL, create_app, sanitize_history
+from doclens.server import DEFAULT_MODEL, DEFAULT_RETRIEVAL_MODE, create_app, sanitize_history
 from doclens.sessions import SessionDoc, SessionStore
 from doclens.types import AnswerResult, Chunk, Retrieved, Usage
 
@@ -40,11 +40,26 @@ def make_doc(doc_id: str = DOC_ID, num_chunks: int = 1) -> SessionDoc:
                       index=VectorIndex(), created=100.0)
 
 
-def fake_answer_question(chat, chat_model, embedder, embed_model, index, question, k=5, history=None):
+def fake_answer_question(chat, chat_model, embedder, embed_model, index, question, k=5, history=None,
+                          *, retrieval_mode="hybrid_rerank", pool=20, tracer=None):
+    # Mirrors the real answer_question's span shape closely enough for the SSE/trace
+    # tests: embed+retrieve+generate always, rerank only in hybrid_rerank mode.
+    if tracer is not None:
+        with tracer.span("embed"):
+            pass
+        with tracer.span("retrieve"):
+            pass
+        if retrieval_mode == "hybrid_rerank":
+            with tracer.span("rerank"):
+                pass
+        with tracer.span("generate"):
+            pass
     return AnswerResult(
         answer="The answer is 42 [p.1].",
         citations=[1],
-        retrieved=[Retrieved(chunk=Chunk("c0", DOC_ID, 1, 0, "hello world " * 20), score=0.9)],
+        retrieved=[Retrieved(chunk=Chunk("c0", DOC_ID, 1, 0, "hello world " * 20), score=0.9,
+                             components={"dense_rank": 1, "bm25_rank": 2,
+                                        "rerank_rank": 1 if retrieval_mode == "hybrid_rerank" else None})],
         refused=False,
         model=chat_model,
         usage=Usage(input_tokens=100, output_tokens=20),
@@ -80,7 +95,7 @@ def test_ask_emits_retrieval_then_answer_events(client):
     r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "what is it?"})
     assert r.status_code == 200
     events = sse_events(r.text)
-    assert [ev for ev, _ in events] == ["retrieval", "answer"]
+    assert [ev for ev, _ in events] == ["retrieval", "trace", "answer"]
 
 
 def test_retrieval_payload_shape_and_preview_truncated(client):
@@ -89,12 +104,89 @@ def test_retrieval_payload_shape_and_preview_truncated(client):
     retrieval = dict(events)["retrieval"]
     assert set(retrieval) == {"chunks"}
     chunk = retrieval["chunks"][0]
-    assert set(chunk) == {"page", "score", "preview"}
+    assert set(chunk) == {"page", "score", "preview", "dense_rank", "bm25_rank", "rerank_rank"}
     assert chunk["page"] == 1
     assert chunk["score"] == pytest.approx(0.9)
+    assert chunk["dense_rank"] == 1
+    assert chunk["bm25_rank"] == 2
+    assert chunk["rerank_rank"] == 1
     long_text = "hello world " * 20
     assert chunk["preview"] == long_text[:160]
     assert len(chunk["preview"]) <= 160
+
+
+def test_trace_payload_has_id_and_nonempty_spans(client):
+    r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "what is it?"})
+    events = sse_events(r.text)
+    trace = dict(events)["trace"]
+    assert set(trace) == {"trace_id", "spans"}
+    assert isinstance(trace["trace_id"], str) and len(trace["trace_id"]) > 0
+    assert isinstance(trace["spans"], list) and len(trace["spans"]) > 0
+
+
+def test_hybrid_rerank_mode_trace_has_rerank_span(client):
+    r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "q"})
+    events = sse_events(r.text)
+    trace = dict(events)["trace"]
+    names = [s["name"] for s in trace["spans"]]
+    assert "rerank" in names
+
+
+def test_dense_mode_trace_has_no_rerank_span(client):
+    r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "q", "mode": "dense"})
+    events = sse_events(r.text)
+    assert events[-1][0] == "answer"
+    trace = dict(events)["trace"]
+    names = [s["name"] for s in trace["spans"]]
+    assert "rerank" not in names
+
+
+@pytest.mark.parametrize("sent_mode, expected_mode", [
+    ("bogus", DEFAULT_RETRIEVAL_MODE),
+    (None, DEFAULT_RETRIEVAL_MODE),
+    ("dense", "dense"),
+    ("hybrid", "hybrid"),
+    ("hybrid_rerank", "hybrid_rerank"),
+])
+def test_mode_validation_and_fallback(client, monkeypatch, sent_mode, expected_mode):
+    """An invalid/absent mode silently falls back to the default; valid modes pass through unchanged."""
+    import doclens.server as srv
+    seen = {}
+
+    def capture_mode(chat, chat_model, embedder, embed_model, index, question, k=5, history=None,
+                     *, retrieval_mode="hybrid_rerank", pool=20, tracer=None):
+        seen["mode"] = retrieval_mode
+        return fake_answer_question(chat, chat_model, embedder, embed_model, index, question, k,
+                                    retrieval_mode=retrieval_mode, pool=pool, tracer=tracer)
+
+    monkeypatch.setattr(srv, "answer_question", capture_mode)
+    body = {"doc_id": DOC_ID, "question": "q"}
+    if sent_mode is not None:
+        body["mode"] = sent_mode
+    r = client.post("/api/ask", json=body)
+    assert r.status_code == 200
+    events = sse_events(r.text)
+    assert events[-1][0] == "answer"
+    assert seen["mode"] == expected_mode
+
+
+def test_get_trace_returns_ndjson_for_known_id(client):
+    r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "what is it?"})
+    trace_id = dict(sse_events(r.text))["trace"]["trace_id"]
+    r2 = client.get(f"/api/trace/{trace_id}")
+    assert r2.status_code == 200
+    assert r2.headers["content-type"].startswith("application/x-ndjson")
+    lines = [ln for ln in r2.text.strip().split("\n") if ln]
+    assert len(lines) >= 1
+    for ln in lines:
+        obj = json.loads(ln)
+        assert "name" in obj and "duration_ms" in obj
+
+
+def test_get_trace_unknown_id_yields_404(client):
+    r = client.get("/api/trace/unknownid")
+    assert r.status_code == 404
+    assert r.json() == {"error": "trace not found"}
 
 
 def test_answer_payload_exact_shape(client):
@@ -112,7 +204,13 @@ def test_answer_payload_exact_shape(client):
 def test_refusal_result_emits_answer_with_refused_true(client, monkeypatch):
     import doclens.server as srv
 
-    def fake_refusal(chat, chat_model, embedder, embed_model, index, question, k=5, history=None):
+    def fake_refusal(chat, chat_model, embedder, embed_model, index, question, k=5, history=None,
+                      *, retrieval_mode="hybrid_rerank", pool=20, tracer=None):
+        if tracer is not None:
+            with tracer.span("embed"):
+                pass
+            with tracer.span("retrieve"):
+                pass
         return AnswerResult(
             answer="Not in the document. Try rephrasing.",
             citations=[],
@@ -123,8 +221,8 @@ def test_refusal_result_emits_answer_with_refused_true(client, monkeypatch):
     monkeypatch.setattr(srv, "answer_question", fake_refusal)
     r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "unrelated?"})
     events = sse_events(r.text)
-    # A refusal must not short-circuit the retrieval event — both still fire, in order.
-    assert [ev for ev, _ in events] == ["retrieval", "answer"]
+    # A refusal must not short-circuit the retrieval or trace events — all three still fire, in order.
+    assert [ev for ev, _ in events] == ["retrieval", "trace", "answer"]
     assert events[-1][1]["refused"] is True
     assert events[-1][1]["citations"] == []
 
@@ -316,9 +414,11 @@ def test_ask_passes_sanitized_history(client, monkeypatch):
     import doclens.server as srv
     seen = {}
 
-    def capture(chat, chat_model, embedder, embed_model, index, question, k=5, history=None):
+    def capture(chat, chat_model, embedder, embed_model, index, question, k=5, history=None,
+                *, retrieval_mode="hybrid_rerank", pool=20, tracer=None):
         seen["history"] = history
-        return fake_answer_question(chat, chat_model, embedder, embed_model, index, question, k)
+        return fake_answer_question(chat, chat_model, embedder, embed_model, index, question, k,
+                                    retrieval_mode=retrieval_mode, pool=pool, tracer=tracer)
 
     monkeypatch.setattr(srv, "answer_question", capture)
     r = client.post("/api/ask", json={

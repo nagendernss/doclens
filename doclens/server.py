@@ -8,20 +8,22 @@ import threading
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .answer import answer_question
+from .answer import RETRIEVAL_MODES, answer_question
 from .chunker import chunk_document
-from .index import VectorIndex
+from .hybrid import HybridIndex
 from .ingest import IngestError, ingest_pdf_bytes
 from .ingest_url import ingest_url
 from .providers.registry import (MissingKeyError, UnknownModelError,
                                  available_chat_models, get_chat, get_embedder)
 from .ratelimit import RateLimiter
 from .sessions import SessionDoc, SessionError, SessionStore
+from .trace import Tracer
 
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_RETRIEVAL_MODE = "hybrid_rerank"
 EMBED_PROGRESS_BATCH = 16
 MAX_QUESTION_CHARS = 500
 RETRIEVAL_PREVIEW_CHARS = 160
@@ -94,11 +96,13 @@ async def _read_ingest_request(request: Request) -> tuple[bytes | None, str, str
     return data, filename, url, byo_key
 
 
-async def _read_ask_request(request: Request) -> tuple[str | None, str | None, str | None, str | None, list]:
-    """Extract (doc_id, question, model, byo_key, history) from a JSON body.
+async def _read_ask_request(request: Request) -> tuple[str | None, str | None, str | None, str | None, list, str | None]:
+    """Extract (doc_id, question, model, byo_key, history, mode) from a JSON body.
 
     A malformed or non-dict body yields all-None/empty list, which the caller turns into a
-    friendly "document not found" SSE error rather than a 4xx.
+    friendly "document not found" SSE error rather than a 4xx. `mode` is returned raw and
+    unvalidated — the caller checks it against RETRIEVAL_MODES and falls back to
+    DEFAULT_RETRIEVAL_MODE, so a bogus value here must never 4xx/5xx.
     """
     try:
         body = await request.json()
@@ -121,7 +125,10 @@ async def _read_ask_request(request: Request) -> tuple[str | None, str | None, s
 
     history = sanitize_history(body.get("history"))
 
-    return doc_id, question, model, byo_key, history
+    raw_mode = body.get("mode")
+    mode = raw_mode if isinstance(raw_mode, str) else None
+
+    return doc_id, question, model, byo_key, history, mode
 
 
 def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = None) -> FastAPI:
@@ -199,7 +206,7 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
                         vectors.extend(embedder.embed([c.text for c in batch], embed_model))
                         emit("progress", {"stage": "embed", "done": len(vectors), "total": n_chunks})
 
-                    index = VectorIndex()
+                    index = HybridIndex()
                     index.add(chunks, vectors)
                     sdoc = SessionDoc(doc_id=doc.doc_id, title=doc.title, pages=n_pages,
                                       chunks=chunks, index=index, created=store.now())
@@ -237,8 +244,9 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
         ip = request.client.host if request.client else "unknown"
         sid = request.cookies.get("dl_sid") or store.new_sid()
 
-        doc_id, question, model, byo_key, history = await _read_ask_request(request)
+        doc_id, question, model, byo_key, history, mode = await _read_ask_request(request)
         chat_model_name = model or DEFAULT_MODEL
+        retrieval_mode = mode if mode in RETRIEVAL_MODES else DEFAULT_RETRIEVAL_MODE
 
         def stream():
             sdoc = store.get(sid, doc_id)
@@ -265,14 +273,21 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
                 try:
                     chat, chat_model = get_chat(chat_model_name, api_key=byo_key)
                     embedder, embed_model = get_embedder(api_key=byo_key)
+                    tracer = Tracer()
                     result = answer_question(chat, chat_model, embedder, embed_model,
-                                             sdoc.index, question, k=ASK_K, history=history)
+                                             sdoc.index, question, k=ASK_K, history=history,
+                                             retrieval_mode=retrieval_mode, tracer=tracer)
                     chunks = [
                         {"page": r.chunk.page, "score": r.score,
-                         "preview": r.chunk.text[:RETRIEVAL_PREVIEW_CHARS]}
+                         "preview": r.chunk.text[:RETRIEVAL_PREVIEW_CHARS],
+                         "dense_rank": r.components.get("dense_rank"),
+                         "bm25_rank": r.components.get("bm25_rank"),
+                         "rerank_rank": r.components.get("rerank_rank")}
                         for r in result.retrieved
                     ]
                     emit("retrieval", {"chunks": chunks})
+                    emit("trace", {"trace_id": tracer.trace.trace_id, "spans": tracer.trace.to_dicts()})
+                    store.add_trace(tracer.trace)
                     emit("answer", {
                         "answer": result.answer,
                         "citations": result.citations,
@@ -304,6 +319,14 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
         })
         resp.set_cookie("dl_sid", sid, httponly=True, samesite="lax")
         return resp
+
+    @app.get("/api/trace/{trace_id}")
+    def get_trace(trace_id: str):
+        store: SessionStore = app.state.store
+        trace = store.get_trace(trace_id)
+        if trace is None:
+            return JSONResponse({"error": "trace not found"}, status_code=404)
+        return Response(trace.to_jsonl(), media_type="application/x-ndjson")
 
     if WEB_DIR.exists():
         app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
