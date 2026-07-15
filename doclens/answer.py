@@ -74,6 +74,11 @@ def answer_question(chat, chat_model: str, embedder, embed_model: str,
         candidates = index.retrieve(qvec, question, mode=base_mode, pool=pool)
         sp.meta.update({"mode": base_mode, "pool": pool, "candidates": len(candidates)})
 
+    # Refuse on the max DENSE cosine over the whole pool (not the RRF/BM25 primary
+    # score, which isn't calibrated to REFUSAL_THRESHOLD). HybridIndex.retrieve
+    # guarantees components["dense_score"] on every candidate in every mode; the
+    # `c.score` fallback only guards a future Index that omits it — if that ever
+    # fires it would substitute an un-calibrated score, so keep the invariant.
     top_dense = max((c.components.get("dense_score", c.score) for c in candidates),
                     default=0.0)
     if not candidates or top_dense < REFUSAL_THRESHOLD:
