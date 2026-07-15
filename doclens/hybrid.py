@@ -57,6 +57,11 @@ class HybridIndex:
             chunk that never scored in BM25.
 
         """
+        if mode not in ("dense", "lexical", "hybrid"):
+            raise ValueError(f"unknown retrieval mode {mode!r}")
+        if pool < 0:
+            pool = 0
+
         dense_ranked = self.dense.rank_all(qvec)
         cos_by_idx = dict(dense_ranked)
         dense_order = [i for i, _ in dense_ranked]

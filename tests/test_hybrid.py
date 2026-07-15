@@ -1,3 +1,5 @@
+import pytest
+
 from doclens.hybrid import HybridIndex
 from doclens.types import Chunk
 
@@ -43,3 +45,15 @@ def test_pool_caps_length_and_len():
     idx = _mk()
     assert len(idx) == 3
     assert len(idx.retrieve([1, 0, 0], "cell", mode="hybrid", pool=2)) == 2
+
+
+def test_unknown_mode_raises():
+    # A typo'd mode must fail loudly, not silently run hybrid without rrf_score.
+    idx = _mk()
+    with pytest.raises(ValueError):
+        idx.retrieve([1, 0, 0], "cell", mode="bogus", pool=3)
+
+
+def test_negative_pool_returns_empty():
+    idx = _mk()
+    assert idx.retrieve([1, 0, 0], "cell", mode="hybrid", pool=-1) == []
