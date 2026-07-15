@@ -12,9 +12,12 @@ def test_single_list_preserves_order():
 
 
 def test_dedup_and_tiebreak_idx_asc():
-    out = rrf([[0, 1], [1, 0]])          # symmetric → equal scores
-    assert [i for i, _ in out] == [0, 1] # idx asc tiebreak
-    assert len(out) == 2
+    # Ordered so idx 1 is inserted into the score dict BEFORE idx 0 (idx 1 is
+    # rank-1 of the first list). Scores are equal, so a stability-only sort with
+    # no idx tiebreak would yield [1, 0]; correct (-score, idx) → [0, 1].
+    out = rrf([[1, 0], [0, 1]])          # symmetric → equal scores, reversed insertion
+    assert [i for i, _ in out] == [0, 1] # idx asc tiebreak, not insertion order
+    assert len(out) == 2                 # deduped: 2 items, not 4
 
 
 def test_k_const_monotonicity():
