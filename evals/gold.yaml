@@ -283,3 +283,61 @@ cases:
     relevant_fps: []
     expected_facts: []
     answerable: false
+
+  # ---------------------------------------------------------------- hybrid_probe.md
+  # Lexical-probe corpus: near-identical "Error code KR-#### ... cause ...
+  # resolution ..." entries that only differ by an exact code + exact fact.
+  # Dense embeddings blur these (same template/domain); BM25/rerank should not.
+  - id: probe-01
+    doc: hybrid_probe.md
+    question: What is the automatic quarantine cooldown period after diagnostic code KR-4021 is triggered on the Kestrel Relay Node?
+    relevant_fps:
+      - 'd982fa012bab|p1|kestrel relay node krn500 diagnostic error code reference'
+    expected_facts:
+      - '45[\s-]?second'
+    answerable: true
+
+  - id: probe-02
+    doc: hybrid_probe.md
+    question: How long after a KR-5560 alert is raised does it auto-escalate to a paging incident if left unresolved?
+    relevant_fps:
+      - 'd982fa012bab|p1|ters reference time source clock drift beyond this'
+    expected_facts:
+      - '30\s*minutes?'
+    answerable: true
+
+  - id: probe-03
+    doc: hybrid_probe.md
+    question: Within how many hours must an operator approve a new certificate fingerprint after signal KR-2317 is raised?
+    relevant_fps:
+      - 'd982fa012bab|p2|d manifest automatically consistency sweeps run every 6'
+    expected_facts:
+      - '24\s*hours?'
+    answerable: true
+
+  - id: probe-04
+    doc: hybrid_probe.md
+    question: What are the high-water and low-water cache utilization marks associated with capacity alarm KR-8814?
+    relevant_fps:
+      - 'd982fa012bab|p2|indow before the budget resets capacity alarm kr8814'
+    expected_facts:
+      - '85\s*(percent|%)'
+      - '70\s*(percent|%)'
+    answerable: true
+
+  - id: probe-05
+    doc: hybrid_probe.md
+    question: How many unresolved KR-7743 flags in a single calendar month trigger an automatic suspension of unsigned changes, and how many days does the audit log retain flagged entries?
+    relevant_fps:
+      - 'd982fa012bab|p3|kouts within a 7day period escalate to a'
+    expected_facts:
+      - '(two|2)\s+unresolved'
+      - '180\s*days?'
+    answerable: true
+
+  - id: probe-u1
+    doc: hybrid_probe.md
+    question: What network port does the Kestrel Relay Node use for peer-to-peer sync traffic?
+    relevant_fps: []
+    expected_facts: []
+    answerable: false
