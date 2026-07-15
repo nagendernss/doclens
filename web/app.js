@@ -138,11 +138,13 @@
 
   // ---------------------------------------------------------------------
   // localStorage per-doc conversation log — doclens.convos.v1 =
-  // {doc_id: [{q, answer, citations, refused, retrieval, ts}, ...]}, capped
-  // at MAX_TURNS_PER_DOC turns/doc (oldest evicted first). `refused` rides
-  // alongside the brief's {q,answer,citations,retrieval,ts} shape so a
+  // {doc_id: [{q, answer, citations, refused, retrieval, trace, ts}, ...]},
+  // capped at MAX_TURNS_PER_DOC turns/doc (oldest evicted first). `refused`
+  // rides alongside the brief's {q,answer,citations,retrieval,ts} shape so a
   // reload/doc-switch still renders the "Not in the document" badge on old
-  // refusal turns, not only on turns freshly answered this session.
+  // refusal turns, not only on turns freshly answered this session. `trace`
+  // ({trace_id, spans}) is additive — turns persisted before this feature
+  // shipped simply carry `trace: null`, which renders no waterfall.
   // ---------------------------------------------------------------------
 
   function loadConvos() {
@@ -164,6 +166,7 @@
             citations: Array.isArray(t.citations) ? t.citations : [],
             refused: t.refused === true,
             retrieval: Array.isArray(t.retrieval) ? t.retrieval : [],
+            trace: (t.trace && typeof t.trace === "object") ? t.trace : null,
             ts: Number.isFinite(t.ts) ? t.ts : Date.now(),
           }));
       }
@@ -562,12 +565,13 @@
   // ---------------------------------------------------------------------
   // ask: conversation log rendering
   //
-  // buildChunkCard/buildTurnEl are built with textContent/createElement/
-  // setAttribute/style — none of these parse their input as HTML, so nothing
-  // there needs esc()/escAttr(), even though `preview`/`q`/`answer` are raw,
-  // untrusted document/model text (including turns reloaded from
-  // localStorage, which a user could have hand-edited). renderCitedAnswer is
-  // the one deliberate innerHTML site — see its own comment below.
+  // buildChunkCard/buildTraceDetails/buildTurnEl are built with textContent/
+  // createElement/setAttribute/style — none of these parse their input as
+  // HTML, so nothing there needs esc()/escAttr(), even though
+  // `preview`/`q`/`answer` are raw, untrusted document/model text (including
+  // turns reloaded from localStorage, which a user could have hand-edited).
+  // renderCitedAnswer is the one deliberate innerHTML site — see its own
+  // comment below.
   // ---------------------------------------------------------------------
 
   function buildChunkCard(c) {
@@ -606,6 +610,29 @@
     previewEl.textContent = preview;
 
     li.append(head, previewEl);
+
+    // Fusion provenance: dense/bm25/rerank ranks are each either a 1-based
+    // int or null (candidate wasn't surfaced by that retriever/stage) — only
+    // present ranks get a badge, dense/bm25/rerank order, no row at all if
+    // none are present.
+    const rankBadges = [
+      ["dense", c && c.dense_rank],
+      ["bm25", c && c.bm25_rank],
+      ["rerank", c && c.rerank_rank],
+    ].filter(([, rank]) => Number.isFinite(rank));
+
+    if (rankBadges.length) {
+      const badgeRow = document.createElement("div");
+      badgeRow.className = "rank-badges";
+      for (const [label, rank] of rankBadges) {
+        const badge = document.createElement("span");
+        badge.className = "rank-badge";
+        badge.textContent = `${label} #${rank}`;
+        badgeRow.appendChild(badge);
+      }
+      li.appendChild(badgeRow);
+    }
+
     return li;
   }
 
@@ -629,6 +656,68 @@
     }
     html += esc(text.slice(last));
     container.innerHTML = html;
+  }
+
+  // Per-turn pipeline waterfall. Spans arrive in the server's recording order
+  // (embed, retrieve, [rerank], generate); offsets/widths are normalized
+  // against the earliest start / latest end across *all* spans in this trace
+  // so the row of bars reads as a true waterfall rather than a stacked bar
+  // chart. Every field is defensively coerced — a trace can round-trip
+  // through localStorage (a user could hand-edit it) same as any other turn
+  // field, so this must never throw on odd input.
+  function buildTraceDetails(trace) {
+    const rawSpans = Array.isArray(trace.spans) ? trace.spans : [];
+    const spans = rawSpans.map((s) => ({
+      name: s && typeof s.name === "string" ? s.name : "",
+      start_ms: s && Number.isFinite(s.start_ms) ? s.start_ms : 0,
+      end_ms: s && Number.isFinite(s.end_ms) ? s.end_ms : 0,
+      duration_ms: s && Number.isFinite(s.duration_ms) ? s.duration_ms : 0,
+      meta: s && s.meta && typeof s.meta === "object" ? s.meta : {},
+    }));
+
+    const minStart = Math.min(...spans.map((s) => s.start_ms));
+    const maxEnd = Math.max(...spans.map((s) => s.end_ms));
+    const totalMs = maxEnd - minStart;
+
+    const details = document.createElement("details");
+    details.className = "trace-details";
+
+    const summary = document.createElement("summary");
+    summary.textContent = `trace · ${Math.round(totalMs)} ms`;
+    details.appendChild(summary);
+
+    for (const span of spans) {
+      const row = document.createElement("div");
+      row.className = "span-row";
+
+      const label = document.createElement("span");
+      label.className = "span-label";
+      label.textContent = span.name;
+
+      const bar = document.createElement("span");
+      bar.className = "span-bar";
+
+      const fill = document.createElement("span");
+      fill.className = "span-bar-fill" + (span.name === "generate" ? " span-bar-fill--accent" : "");
+      const left = totalMs > 0 ? ((span.start_ms - minStart) / totalMs) * 100 : 0;
+      const width = totalMs > 0 ? (span.duration_ms / totalMs) * 100 : 100;
+      fill.style.left = left + "%";
+      fill.style.width = width + "%";
+      bar.appendChild(fill);
+
+      const meta = document.createElement("span");
+      meta.className = "span-meta";
+      let metaText = `${Math.round(span.duration_ms)} ms`;
+      if (Number.isFinite(span.meta.input_tokens) && Number.isFinite(span.meta.output_tokens)) {
+        metaText += ` · ${span.meta.input_tokens + span.meta.output_tokens} tok`;
+      }
+      meta.textContent = metaText;
+
+      row.append(label, bar, meta);
+      details.appendChild(row);
+    }
+
+    return details;
   }
 
   function buildTurnEl(turn, index) {
@@ -674,6 +763,12 @@
       details.appendChild(list);
 
       agentBubble.appendChild(details);
+    }
+
+    // Pipeline waterfall — collapsed like sources; simply absent on turns
+    // persisted before this feature shipped (trace is null there).
+    if (turn.trace && Array.isArray(turn.trace.spans) && turn.trace.spans.length) {
+      agentBubble.appendChild(buildTraceDetails(turn.trace));
     }
 
     wrap.appendChild(agentBubble);
@@ -751,6 +846,7 @@
     if (byoKey) payload.byo_key = byoKey;
 
     let pendingRetrieval = [];
+    let pendingTrace = null;
 
     try {
       const resp = await fetch("/api/ask", {
@@ -765,6 +861,9 @@
           pendingRetrieval = Array.isArray(data.chunks) ? data.chunks : [];
           showAskStatus("writing an answer…");
         },
+        trace: (data) => {
+          pendingTrace = data;
+        },
         answer: (data) => {
           hideAskStatus();
           appendTurn(docId, {
@@ -773,6 +872,7 @@
             citations: Array.isArray(data.citations) ? data.citations : [],
             refused: data.refused === true,
             retrieval: pendingRetrieval,
+            trace: pendingTrace,
             ts: Date.now(),
           });
           renderConvoLog(docId);
