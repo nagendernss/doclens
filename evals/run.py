@@ -9,8 +9,8 @@ import warnings
 
 from doclens.answer import answer_question
 from doclens.chunker import chunk_document
+from doclens.hybrid import HybridIndex
 from doclens.ingest import ingest_file
-from doclens.index import VectorIndex
 from doclens.providers.registry import get_chat, get_embedder
 from doclens.types import fingerprint
 from evals.metrics import faithful, load_gold, mrr, recall_at_k
@@ -81,7 +81,7 @@ def run_eval(
         doc = ingest_file(doc_path)
         chunks = chunk_document(doc)
         vecs = embedder.embed([c.text for c in chunks], embed_model)
-        index = VectorIndex()
+        index = HybridIndex()
         index.add(chunks, vecs)
         corpus_cache[doc_filename] = (chunks, index)
 
