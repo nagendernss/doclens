@@ -99,6 +99,8 @@ model=gemini-3.1-flash-lite tokens=147+31
 with a hand-built BM25 index via Reciprocal Rank Fusion; `hybrid_rerank` adds an LLM listwise
 reranker over the fused pool. The server defaults to **`hybrid`** — the eval below says why.
 
+> 📝 **Write-up:** [When LLM Reranking *Hurt* My RAG (and the eval that caught it)](docs/blog/when-llm-reranking-hurt-my-rag.md) — the story behind these numbers.
+
 **What the numbers say (honestly).** recall@5 saturates at 1.00 for every mode (small corpus,
 `k=5` — see the caveat below), so **MRR** carries the retrieval-quality signal. Splitting it by
 query type is where it gets interesting:
