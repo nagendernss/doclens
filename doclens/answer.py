@@ -28,7 +28,7 @@ RETRIEVAL_MODES = ("dense", "hybrid", "hybrid_rerank")
 def answer_question(chat, chat_model: str, embedder, embed_model: str,
                     index: HybridIndex, question: str, k: int = 5,
                     history: list[dict] | None = None, *,
-                    retrieval_mode: str = "hybrid_rerank", pool: int = 20,
+                    retrieval_mode: str = "hybrid", pool: int = 20,
                     tracer: Tracer | None = None) -> AnswerResult:
     """Embed, hybrid-retrieve, optionally LLM-rerank, then generate a grounded answer.
 

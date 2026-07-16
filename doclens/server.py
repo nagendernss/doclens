@@ -23,7 +23,12 @@ from .sessions import SessionDoc, SessionError, SessionStore
 from .trace import Tracer
 
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
-DEFAULT_RETRIEVAL_MODE = "hybrid_rerank"
+# Default retrieval mode. Set to "hybrid" (not "hybrid_rerank") on the evidence
+# of the eval A/B: LLM listwise rerank on gemini-3.1-flash-lite lifts exact-term
+# MRR (probe 0.90->1.00) but degrades semantic MRR (0.86->0.65) by second-guessing
+# already-correct dense rankings. "hybrid" is robust across both query types.
+# hybrid_rerank stays available per-request for exact-term-heavy corpora.
+DEFAULT_RETRIEVAL_MODE = "hybrid"
 EMBED_PROGRESS_BATCH = 16
 MAX_QUESTION_CHARS = 500
 RETRIEVAL_PREVIEW_CHARS = 160
@@ -278,7 +283,11 @@ def create_app(store: SessionStore | None = None, limiter: RateLimiter | None = 
                                              sdoc.index, question, k=ASK_K, history=history,
                                              retrieval_mode=retrieval_mode, tracer=tracer)
                     chunks = [
-                        {"page": r.chunk.page, "score": r.score,
+                        {"page": r.chunk.page,
+                         # Show the calibrated dense cosine on the score bar in every
+                         # mode; r.score is the RRF fused score (~0.02) in hybrid modes,
+                         # which would render as a near-empty, mislabeled "similarity" bar.
+                         "score": r.components.get("dense_score", r.score),
                          "preview": r.chunk.text[:RETRIEVAL_PREVIEW_CHARS],
                          "dense_rank": r.components.get("dense_rank"),
                          "bm25_rank": r.components.get("bm25_rank"),

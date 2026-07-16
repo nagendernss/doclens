@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     ask.add_argument("question")
     ask.add_argument("--model", default=DEFAULT_MODEL)
     ask.add_argument("-k", type=int, default=5)
-    ask.add_argument("--mode", choices=list(RETRIEVAL_MODES), default="hybrid_rerank")
+    ask.add_argument("--mode", choices=list(RETRIEVAL_MODES), default="hybrid")
     sub.add_parser("models")
     args = parser.parse_args(argv)
 

@@ -57,8 +57,8 @@ def _idx():
 
 # The four legacy tests below assert on the exact shape of chat.calls[0], so they pin
 # retrieval_mode="hybrid" to keep the (only) chat call the generate call.
-# test_low_score_refuses_without_llm deliberately keeps the hybrid_rerank default to
-# prove refusal short-circuits before rerank too.
+# test_low_score_refuses_without_llm pins retrieval_mode="hybrid_rerank" explicitly to
+# prove refusal short-circuits before rerank too (independent of the default mode).
 
 def test_grounded_answer_with_citations():
     chat = FakeChat("Refunds are allowed within 30 days [p.2].")
@@ -74,8 +74,11 @@ def test_grounded_answer_with_citations():
 
 def test_low_score_refuses_without_llm():
     chat = FakeChat("should never be called")
+    # hybrid_rerank is the most-stage mode; refusal must still short-circuit
+    # before ANY chat call (both rerank and generate) when the top dense cosine
+    # is below threshold.
     res = answer_question(chat, "m", FakeEmbedder([0.0, 0.0]), "e", make_index(),
-                          "unrelated question")
+                          "unrelated question", retrieval_mode="hybrid_rerank")
     assert res.refused is True and chat.calls == []
     assert res.answer.startswith("Not in the document")
 

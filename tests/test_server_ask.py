@@ -99,7 +99,9 @@ def test_ask_emits_retrieval_then_answer_events(client):
 
 
 def test_retrieval_payload_shape_and_preview_truncated(client):
-    r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "what is it?"})
+    # explicit hybrid_rerank so rerank_rank is populated (default is now "hybrid")
+    r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "what is it?",
+                                       "mode": "hybrid_rerank"})
     events = sse_events(r.text)
     retrieval = dict(events)["retrieval"]
     assert set(retrieval) == {"chunks"}
@@ -125,7 +127,8 @@ def test_trace_payload_has_id_and_nonempty_spans(client):
 
 
 def test_hybrid_rerank_mode_trace_has_rerank_span(client):
-    r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "q"})
+    r = client.post("/api/ask", json={"doc_id": DOC_ID, "question": "q",
+                                      "mode": "hybrid_rerank"})
     events = sse_events(r.text)
     trace = dict(events)["trace"]
     names = [s["name"] for s in trace["spans"]]

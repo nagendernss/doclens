@@ -24,7 +24,7 @@ def test_ask_happy(mi, mc, mg, me, mh, ma, capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert "Title" in out and "Answer [p.2]." in out and "tokens=9+3" in out
-    assert ma.call_args.kwargs["retrieval_mode"] == "hybrid_rerank"
+    assert ma.call_args.kwargs["retrieval_mode"] == "hybrid"
 
 
 @patch("doclens.cli.answer_question", return_value=fake_answer())
