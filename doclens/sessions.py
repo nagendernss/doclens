@@ -5,10 +5,17 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .index import VectorIndex
 from .types import Chunk
+
+if TYPE_CHECKING:
+    from .hybrid import HybridIndex
+    from .trace import Trace
+
+MAX_TRACES = 200
 
 
 class SessionError(Exception):
@@ -25,7 +32,7 @@ class SessionDoc:
     title: str
     pages: int
     chunks: list[Chunk]
-    index: VectorIndex
+    index: HybridIndex
     created: float
 
 
@@ -49,6 +56,7 @@ class SessionStore:
         self.lock = threading.Lock()
         # Structure: sessions[sid] = {"last_access": float, "docs": {doc_id: SessionDoc}}
         self.sessions: dict[str, dict] = {}
+        self._traces: OrderedDict[str, Trace] = OrderedDict()
 
     def new_sid(self) -> str:
         """Generate a new 32-character hex session ID.
@@ -164,3 +172,28 @@ class SessionStore:
             session_data["last_access"] = self.now()
 
             return docs[doc_id]
+
+    def add_trace(self, trace: Trace) -> None:
+        """Store a trace in the bounded ring.
+
+        Evicts the oldest trace when exceeding MAX_TRACES.
+
+        Args:
+            trace: Trace object to store.
+        """
+        with self.lock:
+            self._traces[trace.trace_id] = trace
+            if len(self._traces) > MAX_TRACES:
+                self._traces.popitem(last=False)
+
+    def get_trace(self, trace_id: str) -> Trace | None:
+        """Retrieve a stored trace by ID.
+
+        Args:
+            trace_id: Trace ID to look up.
+
+        Returns:
+            Trace if found, None otherwise.
+        """
+        with self.lock:
+            return self._traces.get(trace_id)

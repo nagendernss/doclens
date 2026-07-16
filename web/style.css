@@ -893,6 +893,28 @@ select.text-input {
   line-height: 1.5;
 }
 
+/* Fusion provenance badges — which retriever(s) surfaced this candidate and
+   at what rank. Omitted entirely when a chunk carries no ranks at all. */
+.rank-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+
 /* Briefly highlights the retrieval preview a citation pill was clicked for;
    JS adds this class then removes it ~1.2s later (see FLASH_MS in app.js). */
 .chunk-card.flash {
@@ -970,6 +992,90 @@ select.text-input {
 
 .sources-details .retrieval-list {
   margin-top: var(--space-2);
+}
+
+/* ---------- trace waterfall ---------- */
+
+/* Pipeline trace, same collapsed-disclosure treatment as .sources-details
+   (own top border/spacing so the two disclosures read as siblings, not one
+   nested in the other, when both are present on a turn). */
+.trace-details {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+.trace-details summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.trace-details[open] summary {
+  color: var(--text-dim);
+  margin-bottom: var(--space-3);
+}
+
+.span-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 4px 0;
+}
+
+.span-row + .span-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.span-label {
+  flex: none;
+  width: 64px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.span-bar {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+/* Offset (style.left) + width are set inline per-span by buildTraceDetails —
+   a true waterfall, not a stacked bar chart. Muted fill by default; the
+   generate span (usually the dominant cost) gets the accent variant below. */
+.span-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  border-radius: var(--radius-pill);
+  background: var(--text-faint);
+  transition: left 0.4s var(--ease), width 0.4s var(--ease);
+}
+
+.span-bar-fill--accent {
+  background: linear-gradient(90deg, var(--emerald), var(--emerald-strong));
+}
+
+.span-meta {
+  flex: none;
+  min-width: 84px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-faint);
 }
 
 /* ---------- footer ---------- */
@@ -1095,5 +1201,15 @@ select.text-input {
 
   .doc-chip {
     min-width: 150px;
+  }
+
+  .span-label {
+    width: 48px;
+    font-size: 0.62rem;
+  }
+
+  .span-meta {
+    min-width: 64px;
+    font-size: 0.62rem;
   }
 }

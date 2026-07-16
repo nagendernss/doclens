@@ -56,3 +56,26 @@ def test_tie_stability():
     # All three results tie at score 1.0; insertion order should be c0, c2, c4
     assert [r.chunk.chunk_id for r in out] == ["c0", "c2", "c4"]
     assert all(math.isclose(r.score, 1.0, abs_tol=1e-9) for r in out)
+
+
+def test_rank_all_returns_all_sorted_with_index():
+    from doclens.index import VectorIndex
+    from doclens.types import Chunk
+    idx = VectorIndex()
+    ch = [Chunk(f"d-{i}", "d", 1, i, t) for i, t in enumerate(["a","b","c"])]
+    idx.add(ch, [[1,0],[0,1],[1,1]])
+    ranked = idx.rank_all([1,0])
+    assert len(ranked) == 3
+    assert ranked[0][0] == 0                       # exact match cosine highest
+    assert [i for i,_ in ranked] == sorted(range(3), key=lambda i: (-dict(ranked)[i], i))
+
+
+def test_rank_all_empty():
+    from doclens.index import VectorIndex
+    assert VectorIndex().rank_all([1,0]) == []
+
+
+def test_retrieved_has_components_default():
+    from doclens.types import Retrieved, Chunk
+    r = Retrieved(chunk=Chunk("d-0","d",1,0,"x"), score=0.5)
+    assert r.components == {}

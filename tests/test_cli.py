@@ -14,16 +14,29 @@ def fake_answer():
 
 
 @patch("doclens.cli.answer_question", return_value=fake_answer())
-@patch("doclens.cli.VectorIndex")
+@patch("doclens.cli.HybridIndex")
 @patch("doclens.cli.get_embedder", return_value=(MagicMock(embed=lambda t, m: [[1.0]] * len(t)), "e"))
 @patch("doclens.cli.get_chat", return_value=(MagicMock(), "m"))
 @patch("doclens.cli.chunk_document", return_value=[Chunk("c0", "d1", 1, 0, "x")])
 @patch("doclens.cli.ingest_file", return_value=fake_doc())
-def test_ask_happy(mi, mc, mg, me, mv, ma, capsys):
+def test_ask_happy(mi, mc, mg, me, mh, ma, capsys):
     code = main(["ask", "doc.pdf", "what?"])
     out = capsys.readouterr().out
     assert code == 0
     assert "Title" in out and "Answer [p.2]." in out and "tokens=9+3" in out
+    assert ma.call_args.kwargs["retrieval_mode"] == "hybrid"
+
+
+@patch("doclens.cli.answer_question", return_value=fake_answer())
+@patch("doclens.cli.HybridIndex")
+@patch("doclens.cli.get_embedder", return_value=(MagicMock(embed=lambda t, m: [[1.0]] * len(t)), "e"))
+@patch("doclens.cli.get_chat", return_value=(MagicMock(), "m"))
+@patch("doclens.cli.chunk_document", return_value=[Chunk("c0", "d1", 1, 0, "x")])
+@patch("doclens.cli.ingest_file", return_value=fake_doc())
+def test_ask_mode_flag_threads_through_as_retrieval_mode(mi, mc, mg, me, mh, ma, capsys):
+    code = main(["ask", "doc.pdf", "what?", "--mode", "dense"])
+    assert code == 0
+    assert ma.call_args.kwargs["retrieval_mode"] == "dense"
 
 
 @patch("doclens.cli.get_embedder", return_value=(MagicMock(embed=lambda t, m: [[1.0]] * len(t)), "e"))

@@ -248,6 +248,26 @@ def test_session_doc_created_uses_store_clock(monkeypatch):
     assert sdoc.created == 12345.0
 
 
+def test_ingest_builds_hybrid_index_not_bare_vector_index(monkeypatch):
+    """Session doc must be indexed by HybridIndex (dense+BM25), not the old bare VectorIndex."""
+    import doclens.server as srv
+    from doclens.hybrid import HybridIndex
+
+    monkeypatch.setattr(srv, "ingest_pdf_bytes", fake_ingest_pdf_bytes)
+    monkeypatch.setattr(srv, "get_embedder", fake_get_embedder)
+    store = SessionStore()
+    app = create_app(store=store,
+                     limiter=RateLimiter(per_ip_ingest=5, per_ip_question=5, global_cap=100))
+    c = TestClient(app, base_url="http://test")
+    r = c.post("/api/ingest", files={"file": ("a.pdf", b"x", "application/pdf")})
+    events = sse_events(r.text)
+    doc_id = events[-1][1]["doc_id"]
+    sid = r.cookies.get("dl_sid")
+    sdoc = store.get(sid, doc_id)
+    assert isinstance(sdoc.index, HybridIndex)
+    assert len(sdoc.index) == events[-1][1]["chunks"]
+
+
 def test_garbage_pdf_yields_error_event():
     """Real ingest_pdf_bytes (not monkeypatched): unparseable bytes -> IngestError -> error event."""
     app = create_app(limiter=RateLimiter(per_ip_ingest=5, per_ip_question=5, global_cap=100))

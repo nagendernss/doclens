@@ -88,46 +88,76 @@ model=gemini-3.1-flash-lite tokens=147+31
 ## Evals
 
 <!-- evals:start -->
-| Model | Recall@5 | MRR | Faithful | Refusal acc | p50 s |
-|-------|----------|-----|----------|-------------|-------|
-| gemini-3.1-flash-lite | 1.00 | 0.86 | 100.0% | 100.0% | 1.78 |
+| Model | Mode | Recall@5 | MRR | Faithful | Refusal acc | p50 s |
+|-------|------|----------|-----|----------|-------------|-------|
+| gemini-3.1-flash-lite | dense | 1.00 | 0.86 | 100.0% | 100.0% | 1.33 |
+| gemini-3.1-flash-lite | hybrid | 1.00 | 0.83 | 100.0% | 100.0% | 1.34 |
+| gemini-3.1-flash-lite | hybrid_rerank | 1.00 | 0.68 | 100.0% | 100.0% | 2.07 |
 <!-- evals:end -->
 
-Populate the table above with a real run:
+**Three retrieval modes, measured side by side.** `dense` is cosine-only; `hybrid` fuses dense
+with a hand-built BM25 index via Reciprocal Rank Fusion; `hybrid_rerank` adds an LLM listwise
+reranker over the fused pool. The server defaults to **`hybrid`** — the eval below says why.
+
+**What the numbers say (honestly).** recall@5 saturates at 1.00 for every mode (small corpus,
+`k=5` — see the caveat below), so **MRR** carries the retrieval-quality signal. Splitting it by
+query type is where it gets interesting:
+
+| query type | dense | hybrid | hybrid_rerank |
+|------------|-------|--------|---------------|
+| semantic (24 cases) | **0.858** | 0.819 | 0.638 |
+| exact-term probe (5 cases) | 0.900 | 0.900 | 0.900 |
+
+- **Hybrid** costs ~0.03 aggregate MRR versus dense on this semantic-heavy set. That cost buys
+  BM25 exact-string matching (error codes, IDs, rare tokens) that dense embeddings blur — a
+  robustness property this small, semantic-leaning corpus under-measures. It's the default: safe
+  across query types, and the lexical channel earns its keep as a corpus grows.
+- **The LLM reranker (on `gemini-3.1-flash-lite`) is net-negative here.** It drops to 0.64 on
+  semantic queries because a small model second-guesses rankings cosine already got right (10
+  semantic cases regress, several from a perfect 1.0 down to 0.2–0.5). On the exact-term probes
+  it's a wash (0.90): it pulls one needle up (probe-04, 0.5 → 1.0) and knocks another down
+  (probe-02, 1.0 → 0.5). It also roughly doubles p50 latency (2.07s vs 1.33s). So it ships as an
+  opt-in mode, not the default — listwise reranking at this scale wants a stronger judge model or
+  a corpus with harder negatives before it pays off. That's a measured result, surfaced rather
+  than hidden.
+
+`evals/corpus/hybrid_probe.md` is built to expose exactly this axis: near-duplicate diagnostic
+entries distinguished only by unique exact codes, so lexical retrieval has something to win that
+pure embeddings would blur.
+
+**Reproduce it:**
 
 ```bash
-python -m evals.run --models gemini-3.1-flash-lite --out results.json
+python -m evals.run --models gemini-3.1-flash-lite --modes dense,hybrid,hybrid_rerank --out results.json
 python -m evals.report results.json --readme README.md
 ```
 
-**Methodology.** 30 gold cases (24 answerable + 6 unanswerable, 8+2 per document) against 3
-original documents in `evals/corpus/`, each chunking to 6–7 pieces (19 chunks total across the
-corpus — see [Design decisions](#design-decisions)). Gold labels are chunk **fingerprints**
-(`doc_id|p<page>|<first 8 normalized words>`), not chunk IDs, so re-chunking the corpus doesn't
-silently invalidate the gold set. Grading is fully deterministic — no LLM judge:
+**Methodology.** 36 gold cases (29 answerable + 7 unanswerable) across 4 documents in
+`evals/corpus/` — three original docs plus the lexical `hybrid_probe.md` — each chunking to a
+handful of pieces. Gold labels are chunk **fingerprints** (`doc_id|p<page>|<first 8 normalized
+words>`), not chunk IDs, so re-chunking the corpus doesn't silently invalidate the gold set.
+Grading is fully deterministic — no LLM judge:
 
 - **Recall@5** — 1.0 if any gold-relevant chunk fingerprint is in the top-5 retrieved, else 0.0.
 - **MRR** — 1 / rank of the first relevant chunk (0 if none in the top-5).
 - **Faithful** — every `expected_facts` regex matches the answer text, AND every `[p.N]` citation
   in the answer points at a page that was actually retrieved.
-- **Refusal accuracy** — fraction of the 6 unanswerable cases the pipeline correctly refused
-  ("Not in the document"), ideally via the 0.30 cosine short-circuit rather than an LLM call.
+- **Refusal accuracy** — fraction of the unanswerable cases the pipeline correctly refused
+  ("Not in the document") via the 0.30 cosine short-circuit — decided on the max dense score
+  *before* any rerank, so refusal is identical across all three modes.
 
-**Honest caveat, stated on purpose:** with only 6–7 chunks per document and `k=5`, most of a
-document's chunks come back on nearly every question — recall@5 saturates near 1.0 regardless of
-retrieval quality, so on this seed corpus it isn't a discriminating metric. **MRR** (does the
-*most* relevant chunk rank first, not just land in the top 5) and **faithfulness / refusal
-accuracy** (does the model actually ground itself in what it retrieved, and stay quiet when it
-shouldn't answer) carry the real retrieval-quality signal here. A meaningfully larger corpus
-would be needed before recall@5 says anything a coin flip couldn't.
+**Honest caveat, stated on purpose:** with only a handful of chunks per document and `k=5`, most
+of a document's chunks come back on nearly every question — recall@5 saturates near 1.0 regardless
+of retrieval quality, so on this seed corpus it isn't a discriminating metric. **MRR** (does the
+*most* relevant chunk rank first) and **faithfulness / refusal accuracy** carry the real signal.
+A meaningfully larger corpus would be needed before recall@5 says anything a coin flip couldn't.
 
 The runner (`evals/run.py`) ingests, chunks and embeds each corpus document once — not once per
-question — caching and reusing that pass across every model and case. It's resumable:
-`(model, case_id)` pairs already present in `results.json` are skipped on the next run, and every
-record is written through a `.tmp` file + `os.replace` swap, so a rate-limit pause or a crash
-mid-run never corrupts progress. `evals/report.py` turns records into the table above and splices
-it between the `<!-- evals:start -->` / `<!-- evals:end -->` markers, replacing whatever was
-there before — including this placeholder row.
+question or per mode — reusing that pass across every model, mode and case. It's resumable:
+`(model, mode, case_id)` triples already present in `results.json` are skipped on the next run,
+and every record is written through a `.tmp` file + `os.replace` swap, so a rate-limit pause or a
+crash mid-run never corrupts progress. `evals/report.py` turns records into the table above and
+splices it between the `<!-- evals:start -->` / `<!-- evals:end -->` markers.
 
 ## Design decisions
 
